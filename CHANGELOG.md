@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.0](https://github.com/XxxXTeam/Qwen2API_Go/compare/v0.5.0...v0.6.0) (2026-05-10)
+
+
+### Features
+
+* boom 重构前端 ([34a3011](https://github.com/XxxXTeam/Qwen2API_Go/commit/34a30112342514e75b9c98083bdb8b44b719d974))
+* del chat ([0cc14f6](https://github.com/XxxXTeam/Qwen2API_Go/commit/0cc14f6d416d7f1b8e1325d265b50c7370844b14))
+* lingma ([505fff6](https://github.com/XxxXTeam/Qwen2API_Go/commit/505fff607cc8d14bce6366d1017633836c997dde))
+* **openai:** 支持 Anthropic API 的新字段和功能 ([da36476](https://github.com/XxxXTeam/Qwen2API_Go/commit/da36476993558b107502c2586c80cdc3b1f577d3))
+* **qwen:** 添加阿里云人机验证错误处理机制 ([69210c3](https://github.com/XxxXTeam/Qwen2API_Go/commit/69210c3865deea7d7e6e62cef70288e39880ef05))
+* reasoning_effort 兼容 ([231cb26](https://github.com/XxxXTeam/Qwen2API_Go/commit/231cb26d43f22ac60289c8bd11a20d9117f99a41))
+* web 端 AI生图/视频 / 修复 Video 模型 ([a2f9eb3](https://github.com/XxxXTeam/Qwen2API_Go/commit/a2f9eb3d145a17e0277f19c2428d33dd6619379f))
+* 无独有偶,我已放弃 ([be003b8](https://github.com/XxxXTeam/Qwen2API_Go/commit/be003b8aa5711764a787fc59746d8db59146515e))
+
+
+### Bug Fixes
+
+* README ([993037e](https://github.com/XxxXTeam/Qwen2API_Go/commit/993037efcc1273c033722ce700282ee9ac57b7b5))
+
 ## [0.5.0](https://github.com/XxxXTeam/Qwen2API_Go/compare/v0.4.0...v0.5.0) (2026-04-30)
 
 

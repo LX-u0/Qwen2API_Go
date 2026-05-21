@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"qwen2api/internal/lingma/toolemulation"
+	"qwen2api/internal/toolargs"
 )
 
 const (
@@ -864,7 +865,7 @@ func (b *remoteToolCallBuffer) Calls() []toolemulation.ToolCall {
 		if args != "" {
 			var parsed map[string]any
 			if err := json.Unmarshal([]byte(args), &parsed); err == nil {
-				call.Arguments = parsed
+				call.Arguments = toolargs.NormalizeJSONStrings(parsed)
 			} else {
 				call.Arguments = map[string]any{"raw_arguments": args}
 			}

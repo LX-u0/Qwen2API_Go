@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"qwen2api/internal/prompts"
+	"qwen2api/internal/toolargs"
 )
 
 type ToolSchema struct {
@@ -302,7 +303,7 @@ func removeMarkupPreserveWhitespace(text string) string {
 func FormatOpenAIToolCalls(calls []ToolCall) []map[string]any {
 	result := make([]map[string]any, 0, len(calls))
 	for index, call := range calls {
-		rawArgs, _ := json.Marshal(call.Input)
+		rawArgs, _ := json.Marshal(toolargs.NormalizeJSONStrings(call.Input))
 		result = append(result, map[string]any{
 			"index": index,
 			"id":    "call_" + randomHex(8),

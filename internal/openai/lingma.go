@@ -10,6 +10,7 @@ import (
 
 	lingmaservice "qwen2api/internal/lingma/service"
 	"qwen2api/internal/lingma/toolemulation"
+	"qwen2api/internal/toolargs"
 )
 
 const lingmaModelSuffix = "-lingma"
@@ -264,11 +265,11 @@ func lingmaToolCallsFromRaw(raw any) []toolemulation.ToolCall {
 func lingmaToolArguments(raw any) map[string]any {
 	switch v := raw.(type) {
 	case map[string]any:
-		return cloneMap(v)
+		return toolargs.NormalizeJSONStrings(v)
 	case string:
 		var parsed map[string]any
 		if err := json.Unmarshal([]byte(v), &parsed); err == nil && parsed != nil {
-			return parsed
+			return toolargs.NormalizeJSONStrings(parsed)
 		}
 		if strings.TrimSpace(v) != "" {
 			return map[string]any{"raw_arguments": v}
@@ -487,7 +488,7 @@ func flushLingma(flusher http.Flusher) {
 func formatLingmaToolCalls(calls []toolemulation.ToolCall) []map[string]any {
 	out := make([]map[string]any, 0, len(calls))
 	for _, call := range calls {
-		args, _ := json.Marshal(call.Arguments)
+		args, _ := json.Marshal(toolargs.NormalizeJSONStrings(call.Arguments))
 		out = append(out, map[string]any{
 			"id":   call.ID,
 			"type": "function",
@@ -503,7 +504,7 @@ func formatLingmaToolCalls(calls []toolemulation.ToolCall) []map[string]any {
 func formatLingmaToolCallChunks(calls []toolemulation.ToolCall) []map[string]any {
 	out := make([]map[string]any, 0, len(calls))
 	for i, call := range calls {
-		args, _ := json.Marshal(call.Arguments)
+		args, _ := json.Marshal(toolargs.NormalizeJSONStrings(call.Arguments))
 		out = append(out, map[string]any{
 			"index": i,
 			"id":    call.ID,

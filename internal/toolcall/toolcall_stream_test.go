@@ -1,6 +1,7 @@
 package toolcall
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -291,5 +292,28 @@ func TestCleanVisibleChunkPreservesCodeFenceAndBracketWhitespace(t *testing.T) {
 	got2 := CleanVisibleChunk(input2)
 	if got2 != input2 {
 		t.Fatalf("content = %q, want %q", got2, input2)
+	}
+}
+
+func TestFormatOpenAIToolCallsParsesNestedJSONArgumentStrings(t *testing.T) {
+	calls := FormatOpenAIToolCalls([]ToolCall{{
+		Name: "question",
+		Input: map[string]any{
+			"questions": `[{"question":"X","options":["a","b","c"],"required":true}]`,
+		},
+	}})
+
+	fn := calls[0]["function"].(map[string]any)
+	var args map[string]any
+	if err := json.Unmarshal([]byte(fn["arguments"].(string)), &args); err != nil {
+		t.Fatal(err)
+	}
+	questions, ok := args["questions"].([]any)
+	if !ok || len(questions) != 1 {
+		t.Fatalf("questions = %#v, want native array", args["questions"])
+	}
+	first := questions[0].(map[string]any)
+	if first["question"] != "X" || first["required"] != true {
+		t.Fatalf("unexpected question = %#v", first)
 	}
 }

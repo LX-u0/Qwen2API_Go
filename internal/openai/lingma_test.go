@@ -145,6 +145,53 @@ func TestHandleLingmaChatCompletionNonStreamToolCalls(t *testing.T) {
 	}
 }
 
+func TestHandleLingmaChatCompletionParsesNestedJSONArgumentStrings(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`data: {"body":"{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"question\",\"arguments\":\"{\\\"questions\\\":\\\"[{\\\\\\\"question\\\\\\\":\\\\\\\"X\\\\\\\",\\\\\\\"options\\\\\\\":[\\\\\\\"a\\\\\\\",\\\\\\\"b\\\\\\\",\\\\\\\"c\\\\\\\"],\\\\\\\"required\\\\\\\":true}]\\\"}\"}}]}}]}","statusCodeValue":200}`,
+			"",
+			`data: [DONE]`,
+			"",
+		}, "\n")))
+	}))
+	defer upstream.Close()
+
+	handler := &Handler{
+		lingma:  lingmaTestService(t, upstream.URL, ""),
+		metrics: metrics.NewDashboardStats(),
+		logger:  logging.New(false),
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{
+		"model":"kmodel-lingma",
+		"messages":[{"role":"user","content":"ask"}],
+		"tools":[{"type":"function","function":{"name":"question","parameters":{"type":"object"}}}]
+	}`))
+	recorder := httptest.NewRecorder()
+
+	handler.HandleChatCompletion(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	choice := payload["choices"].([]any)[0].(map[string]any)
+	message := choice["message"].(map[string]any)
+	calls := message["tool_calls"].([]any)
+	fn := calls[0].(map[string]any)["function"].(map[string]any)
+	var args map[string]any
+	if err := json.Unmarshal([]byte(fn["arguments"].(string)), &args); err != nil {
+		t.Fatal(err)
+	}
+	questions, ok := args["questions"].([]any)
+	if !ok || len(questions) != 1 {
+		t.Fatalf("questions = %#v, want native array", args["questions"])
+	}
+}
+
 func lingmaTestService(t *testing.T, baseURL string, model string) *lingmaservice.Service {
 	t.Helper()
 	authFile := filepath.Join(t.TempDir(), "credentials.json")

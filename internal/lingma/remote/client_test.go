@@ -332,6 +332,30 @@ func TestRemoteToolCallBufferMergesArgumentFragments(t *testing.T) {
 	}
 }
 
+func TestRemoteToolCallBufferParsesNestedJSONArgumentStrings(t *testing.T) {
+	buffer := newRemoteToolCallBuffer()
+	buffer.Add([]remoteToolCallFragment{{
+		Index:             0,
+		ID:                "call_1",
+		Type:              "function",
+		Name:              "question",
+		ArgumentsFragment: `{"questions":"[{\"question\":\"X\",\"options\":[\"a\",\"b\",\"c\"],\"required\":true}]"}`,
+	}})
+
+	calls := buffer.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("calls = %#v", calls)
+	}
+	questions, ok := calls[0].Arguments["questions"].([]any)
+	if !ok || len(questions) != 1 {
+		t.Fatalf("questions = %#v, want native array", calls[0].Arguments["questions"])
+	}
+	first := questions[0].(map[string]any)
+	if first["question"] != "X" || first["required"] != true {
+		t.Fatalf("unexpected question = %#v", first)
+	}
+}
+
 func TestExtractMachineIDFromTextMarkers(t *testing.T) {
 	got := extractMachineIDFromText(`2026-05-06 info using machine id from file: abcdef1234567890abcdef`)
 	if got != "abcdef1234567890abcdef" {

@@ -35,6 +35,7 @@ type executedChat struct {
 
 type completedChat struct {
 	Content          string
+	ReasoningContent string
 	ToolCalls        []toolcall.ToolCall
 	FinishReason     string
 	PromptTokens     int
@@ -334,7 +335,7 @@ func (h *Handler) readCompletedChat(body io.Reader, model string, toolNames []st
 		return completedChat{}, upstreamErr, nil
 	}
 
-	fullContent, promptTokens, completionTokens, totalTokens := parseChatCompletionContent(rawBody, h.shouldExposeThinking())
+	fullContent, reasoningContent, promptTokens, completionTokens, totalTokens := parseChatCompletionContent(rawBody, h.shouldExposeThinking())
 	h.logger.DebugModule("OPENAI", "non-stream parsed model=%s full_content=%q usage=%s", model, fullContent, debugJSON(map[string]any{
 		"prompt_tokens":     promptTokens,
 		"completion_tokens": completionTokens,
@@ -358,6 +359,7 @@ func (h *Handler) readCompletedChat(body io.Reader, model string, toolNames []st
 
 	return completedChat{
 		Content:          strings.TrimSpace(normalizedContent),
+		ReasoningContent: strings.TrimSpace(reasoningContent),
 		ToolCalls:        parsedCalls,
 		FinishReason:     finishReason,
 		PromptTokens:     promptTokens,

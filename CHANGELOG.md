@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0](https://github.com/XxxXTeam/Qwen2API_Go/compare/v0.6.0...v1.0.0) (2026-05-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* 移除了 IPC 传输方式，现在只支持远程服务模式。 移除了 LINGMA_BACKEND, LINGMA_TRANSPORT, LINGMA_PIPE, LINGMA_WEBSOCKET_URL, LINGMA_SESSION_MODE 环境变量。
+
+### Features
+
+* **admin:** 添加模型列表手动刷新功能 ([2087bc8](https://github.com/XxxXTeam/Qwen2API_Go/commit/2087bc82516e53d2f7f4637e523ff9b9aeef407f))
+* **toolemulation:** 支持解析嵌套JSON参数字符串 ([52c4e13](https://github.com/XxxXTeam/Qwen2API_Go/commit/52c4e133e2284676a8ea761664aafe8212703444))
+* 优化前端 ([6b6e902](https://github.com/XxxXTeam/Qwen2API_Go/commit/6b6e902fa02d93646e44b8e1868eb5ede9d9e50b))
+* 支持 Lingma 远程服务并优化配置 ([c6b3157](https://github.com/XxxXTeam/Qwen2API_Go/commit/c6b31578d0c52e4d76487ea2811b83d0628b0d9d))
+* 添加提示词管理和自定义功能 ([de3cb00](https://github.com/XxxXTeam/Qwen2API_Go/commit/de3cb00e093a6cc88f6d9c43e37ca7f8a289691b))
+
+
+### Bug Fixes
+
+* emit thinking content as reasoning_content field ([a17629a](https://github.com/XxxXTeam/Qwen2API_Go/commit/a17629ab4ae9e7ec18ade5e668af891cd4080897))
+
 ## [0.6.0](https://github.com/XxxXTeam/Qwen2API_Go/compare/v0.5.0...v0.6.0) (2026-05-10)
 
 
@@ -7,7 +27,6 @@
 
 * boom 重构前端 ([34a3011](https://github.com/XxxXTeam/Qwen2API_Go/commit/34a30112342514e75b9c98083bdb8b44b719d974))
 * del chat ([0cc14f6](https://github.com/XxxXTeam/Qwen2API_Go/commit/0cc14f6d416d7f1b8e1325d265b50c7370844b14))
-* lingma ([505fff6](https://github.com/XxxXTeam/Qwen2API_Go/commit/505fff607cc8d14bce6366d1017633836c997dde))
 * **openai:** 支持 Anthropic API 的新字段和功能 ([da36476](https://github.com/XxxXTeam/Qwen2API_Go/commit/da36476993558b107502c2586c80cdc3b1f577d3))
 * **qwen:** 添加阿里云人机验证错误处理机制 ([69210c3](https://github.com/XxxXTeam/Qwen2API_Go/commit/69210c3865deea7d7e6e62cef70288e39880ef05))
 * reasoning_effort 兼容 ([231cb26](https://github.com/XxxXTeam/Qwen2API_Go/commit/231cb26d43f22ac60289c8bd11a20d9117f99a41))

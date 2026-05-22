@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useTranslation } from "react-i18next";
 import { apiRequest, STORAGE_KEY } from "../api";
 import { normalizePromptsResponse } from "../prompts";
 import type {
@@ -33,26 +34,21 @@ function getInitialTheme(): ThemeMode {
   if (typeof window === "undefined") {
     return "light";
   }
-
   const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
   if (savedTheme === "light" || savedTheme === "dark") {
     return savedTheme;
   }
-
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 export function useAdminConsole(initialTab?: TabKey) {
+  const { i18n } = useTranslation();
   const [apiKeyInput, setApiKeyInput] = useState(() => {
-    if (typeof window === "undefined") {
-      return "";
-    }
+    if (typeof window === "undefined") return "";
     return window.localStorage.getItem(STORAGE_KEY) || "";
   });
   const [apiKey, setApiKey] = useState(() => {
-    if (typeof window === "undefined") {
-      return "";
-    }
+    if (typeof window === "undefined") return "";
     return window.localStorage.getItem(STORAGE_KEY) || "";
   });
   const [verified, setVerified] = useState(false);
@@ -78,26 +74,26 @@ export function useAdminConsole(initialTab?: TabKey) {
   const [activeTab, setActiveTab] = useState<TabKey>(initialTab || "overview");
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
+    if (typeof window === "undefined") return false;
     return window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
   });
   const [loadingShell, startShellTransition] = useTransition();
   const [loadingAccounts, startAccountsTransition] = useTransition();
+  const [sseConnected, setSseConnected] = useState(false);
+  const sseRef = useRef<EventSource | null>(null);
 
   const filteredModels = useMemo(() => {
     const keyword = deferredModelKeyword.trim().toLowerCase();
-    const filtered = !keyword ? models : models.filter((model) =>
-      [model.id, model.name, model.display_name, model.upstream_id]
-        .filter(Boolean)
-        .some((item) => String(item).toLowerCase().includes(keyword)),
-    );
+    const filtered = !keyword
+      ? models
+      : models.filter((model) =>
+          [model.id, model.name, model.display_name, model.upstream_id]
+            .filter(Boolean)
+            .some((item) => String(item).toLowerCase().includes(keyword)),
+        );
     return [...filtered].sort((left, right) => {
       const usageDiff = (right.usage?.totalTokens || 0) - (left.usage?.totalTokens || 0);
-      if (usageDiff !== 0) {
-        return usageDiff;
-      }
+      if (usageDiff !== 0) return usageDiff;
       return left.id.localeCompare(right.id, "zh-CN");
     });
   }, [deferredModelKeyword, models]);
@@ -113,106 +109,142 @@ export function useAdminConsole(initialTab?: TabKey) {
     [models],
   );
 
-  const loadShell = useCallback(async (overrideKey?: string) => {
-    const requestKey = overrideKey || apiKey;
-    if (!requestKey) {
-      return;
-    }
-
-    try {
-      const [overviewRes, settingsRes, promptsRes, modelsRes] = await Promise.all([
-        apiRequest<OverviewResponse>("/api/dashboard/overview", {}, requestKey),
-        apiRequest<SettingsResponse>("/api/settings", {}, requestKey),
-        apiRequest<PromptsResponse>("/api/prompts", {}, requestKey),
-        apiRequest<ModelsResponse>("/api/models", {}, requestKey),
-      ]);
-
-      setOverview(overviewRes);
-      setSettings(settingsRes);
-      setPrompts(normalizePromptsResponse(promptsRes));
-      setModels(modelsRes.data || []);
-    } catch (error) {
-      setToast({ type: "error", message: error instanceof Error ? error.message : "加载控制台失败" });
-    }
-  }, [apiKey]);
-
-  const loadAccounts = useCallback(async (overrideKey?: string) => {
-    const requestKey = overrideKey || apiKey;
-    if (!requestKey) {
-      return;
-    }
-
-    try {
-      const query = new URLSearchParams({
-        page: String(filters.page),
-        pageSize: String(filters.pageSize),
-        keyword: filters.keyword,
-        status: filters.status,
-        sortBy: filters.sortBy,
-        sortOrder: filters.sortOrder,
-      });
-
-      const response = await apiRequest<AccountsResponse>(`/api/getAllAccounts?${query.toString()}`, {}, requestKey);
-      setAccounts(response);
-    } catch (error) {
-      setToast({ type: "error", message: error instanceof Error ? error.message : "加载账号列表失败" });
-    }
-  }, [apiKey, filters.page, filters.pageSize, filters.keyword, filters.sortBy, filters.sortOrder, filters.status]);
-
-  const pollBatchTask = useCallback(async (taskId: string) => {
-    if (!apiKey) {
-      return;
-    }
-
-    try {
-      const response = await apiRequest<BatchTaskResponse>(`/api/batchTasks/${taskId}`, {}, apiKey);
-      setBatchTask(response);
-
-      if (response.status === "completed") {
-        setToast({ type: "success", message: response.message });
-        await loadAccounts();
-        await loadShell();
+  const loadShell = useCallback(
+    async (overrideKey?: string) => {
+      const requestKey = overrideKey || apiKey;
+      if (!requestKey) return;
+      try {
+        const [overviewRes, settingsRes, promptsRes, modelsRes] = await Promise.all([
+          apiRequest<OverviewResponse>("/api/dashboard/overview", {}, requestKey),
+          apiRequest<SettingsResponse>("/api/settings", {}, requestKey),
+          apiRequest<PromptsResponse>("/api/prompts", {}, requestKey),
+          apiRequest<ModelsResponse>("/api/models", {}, requestKey),
+        ]);
+        setOverview(overviewRes);
+        setSettings(settingsRes);
+        setPrompts(normalizePromptsResponse(promptsRes));
+        setModels(modelsRes.data || []);
+      } catch (error) {
+        setToast({ type: "error", message: error instanceof Error ? error.message : "加载控制台失败" });
       }
-    } catch (error) {
-      setToast({ type: "error", message: error instanceof Error ? error.message : "批量任务查询失败" });
-    }
-  }, [apiKey, loadAccounts, loadShell]);
+    },
+    [apiKey],
+  );
 
-  const verifyAdmin = useCallback(async (key: string, silent = false) => {
-    try {
-      const result = await apiRequest<VerifyResponse>("/verify", {
-        method: "POST",
-        body: JSON.stringify({ apiKey: key }),
-      });
-
-      if (!result.isAdmin) {
-        throw new Error("当前 API Key 不是管理员密钥");
+  const loadAccounts = useCallback(
+    async (overrideKey?: string) => {
+      const requestKey = overrideKey || apiKey;
+      if (!requestKey) return;
+      try {
+        const query = new URLSearchParams({
+          page: String(filters.page),
+          pageSize: String(filters.pageSize),
+          keyword: filters.keyword,
+          status: filters.status,
+          sortBy: filters.sortBy,
+          sortOrder: filters.sortOrder,
+        });
+        const response = await apiRequest<AccountsResponse>(`/api/getAllAccounts?${query.toString()}`, {}, requestKey);
+        setAccounts(response);
+      } catch (error) {
+        setToast({ type: "error", message: error instanceof Error ? error.message : "加载账号列表失败" });
       }
+    },
+    [apiKey, filters.page, filters.pageSize, filters.keyword, filters.sortBy, filters.sortOrder, filters.status],
+  );
 
-      window.localStorage.setItem(STORAGE_KEY, key);
-      setApiKey(key);
-      setVerified(true);
-      if (!silent) {
-        setToast({ type: "success", message: "管理员验证成功，已载入控制台。" });
+  const pollBatchTask = useCallback(
+    async (taskId: string) => {
+      if (!apiKey) return;
+      try {
+        const response = await apiRequest<BatchTaskResponse>(`/api/batchTasks/${taskId}`, {}, apiKey);
+        setBatchTask(response);
+        if (response.status === "completed") {
+          setToast({ type: "success", message: response.message });
+          await loadAccounts();
+          await loadShell();
+        }
+      } catch (error) {
+        setToast({ type: "error", message: error instanceof Error ? error.message : "批量任务查询失败" });
       }
+    },
+    [apiKey, loadAccounts, loadShell],
+  );
 
-      startShellTransition(() => {
-        void loadShell(key);
-      });
-    } catch (error) {
-      setVerified(false);
-      setApiKey("");
-      window.localStorage.removeItem(STORAGE_KEY);
-      setToast({ type: "error", message: error instanceof Error ? error.message : "验证失败" });
-    }
-  }, [loadShell]);
+  const verifyAdmin = useCallback(
+    async (key: string, silent = false) => {
+      try {
+        const result = await apiRequest<VerifyResponse>("/verify", {
+          method: "POST",
+          body: JSON.stringify({ apiKey: key }),
+        });
+        if (!result.isAdmin) {
+          throw new Error("当前 API Key 不是管理员密钥");
+        }
+        window.localStorage.setItem(STORAGE_KEY, key);
+        setApiKey(key);
+        setVerified(true);
+        if (!silent) {
+          setToast({ type: "success", message: "管理员验证成功，已载入控制台。" });
+        }
+        startShellTransition(() => {
+          void loadShell(key);
+        });
+      } catch (error) {
+        setVerified(false);
+        setApiKey("");
+        window.localStorage.removeItem(STORAGE_KEY);
+        setToast({ type: "error", message: error instanceof Error ? error.message : "验证失败" });
+      }
+    },
+    [loadShell],
+  );
+
+  // SSE real-time stream
+  useEffect(() => {
+    if (!verified || !apiKey) return;
+    if (sseRef.current) return;
+
+    const es = new EventSource(`/api/dashboard/stream?apiKey=${encodeURIComponent(apiKey)}`, {
+      withCredentials: false,
+    });
+    sseRef.current = es;
+
+    es.addEventListener("open", () => setSseConnected(true));
+    es.addEventListener("error", () => setSseConnected(false));
+    es.addEventListener("message", (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.event === "snapshot" && payload.data) {
+          setOverview((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  accounts: payload.data.accounts,
+                  apiKeys: payload.data.apiKeys,
+                  analytics: payload.data.analytics,
+                  generatedAt: payload.data.generatedAt,
+                }
+              : prev,
+          );
+        }
+      } catch {
+        // ignore malformed events
+      }
+    });
+
+    return () => {
+      es.close();
+      sseRef.current = null;
+      setSseConnected(false);
+    };
+  }, [verified, apiKey]);
 
   useEffect(() => {
     if (apiKey) {
       const timeout = window.setTimeout(() => {
         void verifyAdmin(apiKey, true);
       }, 0);
-
       return () => window.clearTimeout(timeout);
     }
   }, [apiKey, verifyAdmin]);
@@ -229,36 +261,24 @@ export function useAdminConsole(initialTab?: TabKey) {
     const trimmed = deferredKeyword.trim();
     const timeout = window.setTimeout(() => {
       setFilters((current) => {
-        if (current.keyword === trimmed && current.page === 1) {
-          return current;
-        }
+        if (current.keyword === trimmed && current.page === 1) return current;
         return { ...current, keyword: trimmed, page: 1 };
       });
     }, 250);
-
     return () => window.clearTimeout(timeout);
   }, [deferredKeyword]);
 
   useEffect(() => {
-    if (!verified || !apiKey || !batchTask?.taskId) {
-      return;
-    }
-    if (batchTask.status === "completed" || batchTask.status === "failed") {
-      return;
-    }
-
+    if (!verified || !apiKey || !batchTask?.taskId) return;
+    if (batchTask.status === "completed" || batchTask.status === "failed") return;
     const timer = window.setInterval(() => {
       void pollBatchTask(batchTask.taskId);
     }, 2000);
-
     return () => window.clearInterval(timer);
   }, [verified, apiKey, batchTask, pollBatchTask]);
 
   useEffect(() => {
-    if (!toast) {
-      return;
-    }
-
+    if (!toast) return;
     const timeout = window.setTimeout(() => setToast(null), 4000);
     return () => window.clearTimeout(timeout);
   }, [toast]);
@@ -274,16 +294,10 @@ export function useAdminConsole(initialTab?: TabKey) {
   }, [sidebarCollapsed]);
 
   async function submitAction<T = unknown>(path: string, body?: Record<string, unknown>, method = "POST") {
-    if (!apiKey) {
-      return null;
-    }
-
+    if (!apiKey) return null;
     return apiRequest<T>(
       path,
-      {
-        method,
-        body: body ? JSON.stringify(body) : undefined,
-      },
+      { method, body: body ? JSON.stringify(body) : undefined },
       apiKey,
     );
   }
@@ -300,6 +314,13 @@ export function useAdminConsole(initialTab?: TabKey) {
       setSavingSettings(false);
     }
   }
+
+  const changeLanguage = useCallback(
+    (lng: string) => {
+      i18n.changeLanguage(lng);
+    },
+    [i18n],
+  );
 
   return {
     state: {
@@ -329,6 +350,8 @@ export function useAdminConsole(initialTab?: TabKey) {
       loadingShell,
       loadingAccounts,
       apiKey,
+      sseConnected,
+      language: i18n.language,
     },
     actions: {
       setApiKeyInput,
@@ -338,6 +361,10 @@ export function useAdminConsole(initialTab?: TabKey) {
         setApiKey("");
         setApiKeyInput("");
         window.localStorage.removeItem(STORAGE_KEY);
+        if (sseRef.current) {
+          sseRef.current.close();
+          sseRef.current = null;
+        }
       },
       refreshShell: () => loadShell(),
       refreshAccounts: () => loadAccounts(),
@@ -362,11 +389,9 @@ export function useAdminConsole(initialTab?: TabKey) {
       },
       toggleSidebar: () => setSidebarCollapsed((current) => !current),
       toggleTheme: () => setThemeMode((current) => (current === "light" ? "dark" : "light")),
+      changeLanguage,
       createAccount: async () => {
-        await submitAction("/api/setAccount", {
-          email: newAccountEmail,
-          password: newAccountPassword,
-        });
+        await submitAction("/api/setAccount", { email: newAccountEmail, password: newAccountPassword });
         setNewAccountEmail("");
         setNewAccountPassword("");
         setToast({ type: "success", message: "账号创建成功。" });
@@ -374,10 +399,7 @@ export function useAdminConsole(initialTab?: TabKey) {
         await loadShell();
       },
       createBatchTask: async () => {
-        const response = await submitAction<BatchTaskResponse>("/api/setAccounts", {
-          accounts: batchAccountsText,
-          async: true,
-        });
+        const response = await submitAction<BatchTaskResponse>("/api/setAccounts", { accounts: batchAccountsText, async: true });
         if (response) {
           setBatchTask(response);
           setBatchAccountsText("");
@@ -413,9 +435,7 @@ export function useAdminConsole(initialTab?: TabKey) {
         try {
           setRefreshingModels(true);
           const response = await submitAction<ModelsResponse>("/api/refresh-models", {});
-          if (response) {
-            setModels(response.data || []);
-          }
+          if (response) setModels(response.data || []);
           setToast({ type: "success", message: "模型列表已从上游刷新。" });
         } catch (error) {
           setToast({ type: "error", message: error instanceof Error ? error.message : "刷新模型列表失败" });

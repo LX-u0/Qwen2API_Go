@@ -228,6 +228,6 @@ export type ToastState = {
 
 export type Tone = "default" | "success" | "warning" | "danger";
 
-export type TabKey = "overview" | "accounts" | "settings" | "prompts" | "models" | "uploads" | "debug" | "images" | "videos";
+export type TabKey = "overview" | "datascreen" | "accounts" | "settings" | "prompts" | "models" | "uploads" | "debug" | "images" | "videos";
 
 export type ThemeMode = "light" | "dark";

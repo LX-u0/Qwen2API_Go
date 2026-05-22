@@ -993,3 +993,51 @@ func (h *Handler) HandleBatchTask(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, task.snapshot())
 }
+
+func (h *Handler) HandleDashboardStream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "Streaming unsupported"})
+		return
+	}
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			keys := h.keyring.Snapshot()
+			health := h.accounts.BuildHealthStats()
+			payload, _ := json.Marshal(map[string]any{
+				"event": "snapshot",
+				"data": map[string]any{
+					"accounts": map[string]any{
+						"initialized":  health.Initialized,
+						"total":        health.Accounts["total"],
+						"valid":        health.Accounts["valid"],
+						"expiringSoon": health.Accounts["expiringSoon"],
+						"expired":      health.Accounts["expired"],
+						"invalid":      health.Accounts["invalid"],
+					},
+					"apiKeys": map[string]any{
+						"total":   len(keys.APIKeys),
+						"admin":   boolToInt(keys.AdminKey != ""),
+						"regular": len(keys.RegularKeys),
+					},
+					"analytics": h.metrics.Snapshot(),
+					"generatedAt": time.Now().UTC().Format(time.RFC3339),
+				},
+			})
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", payload)
+			flusher.Flush()
+		}
+	}
+}

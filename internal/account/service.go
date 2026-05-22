@@ -298,9 +298,10 @@ func (s *Service) AddAccountWithToken(email, password, token string, expires int
 	defer s.mu.Unlock()
 	previous := append([]storage.Account(nil), s.accounts...)
 	for _, existing := range s.accounts {
-		if strings.EqualFold(existing.Email, email) {
-			return errors.New("账号已存在")
+		if !strings.EqualFold(existing.Email, email) {
+			continue
 		}
+		return errors.New("账号已存在")
 	}
 	filtered := s.accounts[:0]
 	for _, existing := range s.accounts {

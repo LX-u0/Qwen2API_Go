@@ -1,3 +1,6 @@
+"use client";
+
+import { useTranslation } from "react-i18next";
 import {
   formatCompactNumber,
   formatDecimal,
@@ -22,6 +25,7 @@ export function OverviewTab({
     video: number;
   };
 }) {
+  const { t } = useTranslation();
   const accounts = overview?.accounts;
   const analytics = overview?.analytics;
 
@@ -30,24 +34,24 @@ export function OverviewTab({
       {/* KPI Row 1 */}
       <div className="admin-stat-grid">
         <StatCard
-          title="账号池总量"
+          title={t("overview.accountTotal")}
           value={accounts?.total ?? "--"}
-          description="分页管理，不把整池账号一次塞进浏览器"
+          description="Paginated management"
         />
         <StatCard
-          title="健康账号"
+          title={t("overview.accountValid")}
           value={accounts?.valid ?? "--"}
-          description="有效期充足，可参与轮转"
+          description="Valid and rotating"
           tone="success"
         />
         <StatCard
-          title="即将过期"
+          title={t("overview.accountExpiring")}
           value={accounts?.expiringSoon ?? "--"}
-          description="建议提前刷新，减少命中失效账号"
+          description="Recommend early refresh"
           tone="warning"
         />
         <StatCard
-          title="模型总数"
+          title={t("overview.modelTotal")}
           value={modelCounts.total}
           description={`Thinking ${modelCounts.thinking} / Search ${modelCounts.search}`}
           tone="danger"
@@ -57,26 +61,26 @@ export function OverviewTab({
       {/* KPI Row 2 */}
       <div className="admin-stat-grid">
         <StatCard
-          title="业务 RPM"
+          title={t("overview.rpm")}
           value={formatCompactNumber(analytics?.rpm)}
-          description={`近 30 分钟均值 ${formatDecimal(analytics?.averageRpm)} rpm，不含后台管理请求`}
+          description={`30m avg ${formatDecimal(analytics?.averageRpm)} rpm`}
           tone="success"
         />
         <StatCard
-          title="业务总请求"
+          title={t("overview.totalRequests")}
           value={formatCompactNumber(analytics?.totals.requests)}
-          description={`成功率 ${formatDecimal(analytics?.successRate, 2)}%，错误 ${formatCompactNumber(analytics?.totals.errors)}`}
+          description={`Success ${formatDecimal(analytics?.successRate, 2)}%, Errors ${formatCompactNumber(analytics?.totals.errors)}`}
         />
         <StatCard
-          title="总输入 Token"
+          title={t("overview.promptTokens")}
           value={formatCompactNumber(analytics?.totals.promptTokens)}
-          description={`近 30 分钟输入输出合计 ${formatCompactNumber(analytics?.tokens30m)}`}
+          description={`30m total ${formatCompactNumber(analytics?.tokens30m)}`}
           tone="warning"
         />
         <StatCard
-          title="总输出 Token"
+          title={t("overview.completionTokens")}
           value={formatCompactNumber(analytics?.totals.completionTokens)}
-          description={`累计总 Token ${formatCompactNumber(analytics?.totals.totalTokens)}`}
+          description={`Total ${formatCompactNumber(analytics?.totals.totalTokens)}`}
           tone="danger"
         />
       </div>
@@ -93,15 +97,15 @@ export function OverviewTab({
           <div className="admin-card">
             <div className="admin-card-header">
               <div>
-                <h3>账号池健康</h3>
-                <p>便于判断是否需要批量刷新或补录账号</p>
+                <h3>{t("overview.accountHealth")}</h3>
+                <p>Account pool health overview</p>
               </div>
             </div>
             <div className="admin-card-body">
-              <MetricRow label="健康账号" value={accounts?.valid ?? 0} total={accounts?.total ?? 0} />
-              <MetricRow label="即将过期" value={accounts?.expiringSoon ?? 0} total={accounts?.total ?? 0} />
-              <MetricRow label="已过期" value={accounts?.expired ?? 0} total={accounts?.total ?? 0} />
-              <MetricRow label="无效 / 缺失" value={accounts?.invalid ?? 0} total={accounts?.total ?? 0} />
+              <MetricRow label={t("overview.accountValid")} value={accounts?.valid ?? 0} total={accounts?.total ?? 0} />
+              <MetricRow label={t("overview.accountExpiring")} value={accounts?.expiringSoon ?? 0} total={accounts?.total ?? 0} />
+              <MetricRow label={t("accounts.statusExpired")} value={accounts?.expired ?? 0} total={accounts?.total ?? 0} />
+              <MetricRow label={t("accounts.statusInvalid")} value={accounts?.invalid ?? 0} total={accounts?.total ?? 0} />
             </div>
           </div>
         </div>
@@ -112,8 +116,8 @@ export function OverviewTab({
         <div className="admin-card">
           <div className="admin-card-header">
             <div>
-              <h3>流量拆分</h3>
-              <p>业务请求与后台访问彻底分离</p>
+              <h3>{t("overview.trafficSplit")}</h3>
+              <p>Business vs admin requests</p>
             </div>
           </div>
           <div className="admin-card-body space-y-3">
@@ -139,25 +143,25 @@ export function OverviewTab({
         <div className="admin-card">
           <div className="admin-card-header">
             <div>
-              <h3>服务参数</h3>
-              <p>关键运行配置快速定位</p>
+              <h3>{t("overview.serviceParams")}</h3>
+              <p>Key runtime configuration</p>
             </div>
           </div>
           <div className="admin-card-body space-y-3">
             <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-secondary)]">监听地址</span>
+              <span className="text-[var(--text-secondary)]">Listen</span>
               <strong className="mono">{overview?.server.listenAddress}:{overview?.server.listenPort}</strong>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-secondary)]">数据模式</span>
+              <span className="text-[var(--text-secondary)]">Data Mode</span>
               <strong>{overview?.server.dataSaveMode ?? "--"}</strong>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-secondary)]">并发数</span>
+              <span className="text-[var(--text-secondary)]">Concurrency</span>
               <strong>{overview?.server.batchLoginConcurrency ?? "--"}</strong>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-secondary)]">搜索模式</span>
+              <span className="text-[var(--text-secondary)]">Search</span>
               <strong>{overview?.server.searchInfoMode ?? "--"}</strong>
             </div>
           </div>
@@ -166,13 +170,13 @@ export function OverviewTab({
         <div className="admin-card">
           <div className="admin-card-header">
             <div>
-              <h3>模型供给</h3>
-              <p>当前后台可见模型池概况</p>
+              <h3>{t("overview.modelSupply")}</h3>
+              <p>Current model pool overview</p>
             </div>
           </div>
           <div className="admin-card-body space-y-3">
             <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-secondary)]">模型总数</span>
+              <span className="text-[var(--text-secondary)]">{t("overview.modelTotal")}</span>
               <strong>{modelCounts.total}</strong>
             </div>
             <div className="flex justify-between text-sm">
@@ -184,7 +188,7 @@ export function OverviewTab({
               <strong>{modelCounts.search}</strong>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-secondary)]">媒体模型</span>
+              <span className="text-[var(--text-secondary)]">Media</span>
               <strong>{modelCounts.image + modelCounts.video}</strong>
             </div>
           </div>
@@ -193,8 +197,8 @@ export function OverviewTab({
         <div className="admin-card">
           <div className="admin-card-header">
             <div>
-              <h3>密钥与时间</h3>
-              <p>当前控制面的基础元数据</p>
+              <h3>{t("overview.keysAndTime")}</h3>
+              <p>Control panel metadata</p>
             </div>
           </div>
           <div className="admin-card-body space-y-3">
@@ -203,15 +207,15 @@ export function OverviewTab({
               <strong>{overview?.apiKeys.total ?? "--"}</strong>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-secondary)]">管理员 Key</span>
+              <span className="text-[var(--text-secondary)]">Admin Key</span>
               <strong>{overview?.apiKeys.admin ?? "--"}</strong>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-secondary)]">普通 Key</span>
+              <span className="text-[var(--text-secondary)]">Regular Key</span>
               <strong>{overview?.apiKeys.regular ?? "--"}</strong>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-secondary)]">生成时间</span>
+              <span className="text-[var(--text-secondary)]">Generated</span>
               <strong>
                 {overview?.generatedAt
                   ? new Date(overview.generatedAt).toLocaleTimeString("zh-CN", { hour12: false })
@@ -226,34 +230,34 @@ export function OverviewTab({
       <div className="admin-card">
         <div className="admin-card-header">
           <div>
-            <h3>运营指标</h3>
-            <p>把业务流量、账号池状态、模型供给和后台交互拆成清晰的运营视图</p>
+            <h3>{t("overview.opsMetrics")}</h3>
+            <p>Operations view of traffic, accounts, models and admin</p>
           </div>
         </div>
         <div className="admin-card-body">
           <div className="admin-grid-3">
             <div className="flex flex-col gap-3 p-4 border border-[var(--border)] rounded-lg bg-[var(--surface-hover)]">
-              <span className="text-sm text-[var(--text-secondary)]">服务在线</span>
+              <span className="text-sm text-[var(--text-secondary)]">{t("overview.uptime")}</span>
               <strong className="text-xl">{formatUptime(analytics?.uptimeSeconds)}</strong>
             </div>
             <div className="flex flex-col gap-3 p-4 border border-[var(--border)] rounded-lg bg-[var(--surface-hover)]">
-              <span className="text-sm text-[var(--text-secondary)]">30 分钟请求</span>
+              <span className="text-sm text-[var(--text-secondary)]">{t("overview.requests30m")}</span>
               <strong className="text-xl">{formatCompactNumber(analytics?.requests30m)}</strong>
             </div>
             <div className="flex flex-col gap-3 p-4 border border-[var(--border)] rounded-lg bg-[var(--surface-hover)]">
-              <span className="text-sm text-[var(--text-secondary)]">后台请求</span>
+              <span className="text-sm text-[var(--text-secondary)]">{t("overview.adminRequests")}</span>
               <strong className="text-xl">{formatCompactNumber(analytics?.adminRequests30m)}</strong>
             </div>
             <div className="flex flex-col gap-3 p-4 border border-[var(--border)] rounded-lg bg-[var(--surface-hover)]">
-              <span className="text-sm text-[var(--text-secondary)]">请求峰值</span>
+              <span className="text-sm text-[var(--text-secondary)]">{t("overview.peakRequests")}</span>
               <strong className="text-xl">{formatCompactNumber(analytics?.peakRequests)}</strong>
             </div>
             <div className="flex flex-col gap-3 p-4 border border-[var(--border)] rounded-lg bg-[var(--surface-hover)]">
-              <span className="text-sm text-[var(--text-secondary)]">Token 峰值</span>
+              <span className="text-sm text-[var(--text-secondary)]">{t("overview.peakTokens")}</span>
               <strong className="text-xl">{formatCompactNumber(analytics?.peakTokens)}</strong>
             </div>
             <div className="flex flex-col gap-3 p-4 border border-[var(--border)] rounded-lg bg-[var(--surface-hover)]">
-              <span className="text-sm text-[var(--text-secondary)]">上传请求</span>
+              <span className="text-sm text-[var(--text-secondary)]">{t("overview.uploadRequests")}</span>
               <strong className="text-xl">{formatCompactNumber(analytics?.totals.upload)}</strong>
             </div>
           </div>

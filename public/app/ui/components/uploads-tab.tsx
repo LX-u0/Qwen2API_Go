@@ -1,12 +1,15 @@
 "use client";
 
+import { useTranslation } from "react-i18next";
 import { Input } from "@heroui/react";
+import { Upload, X, FileUp, Link2, Copy } from "lucide-react";
 import { useMemo, useState } from "react";
 import { apiRequest } from "../api";
 import type { UploadItem, UploadResponse } from "../types";
 import { EndpointItem } from "./primitives";
 
 export function UploadsTab({ apiKey }: { apiKey: string }) {
+  const { t } = useTranslation();
   const [files, setFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<UploadItem[]>([]);
@@ -15,29 +18,22 @@ export function UploadsTab({ apiKey }: { apiKey: string }) {
   const totalSize = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
 
   async function submitUploads() {
-    if (!files.length || !apiKey) {
-      return;
-    }
-
+    if (!files.length || !apiKey) return;
     const formData = new FormData();
     for (const file of files) {
       formData.append("files", file);
     }
-
     try {
       setLoading(true);
       setError("");
       const response = await apiRequest<UploadResponse>(
         "/v1/uploads",
-        {
-          method: "POST",
-          body: formData,
-        },
+        { method: "POST", body: formData },
         apiKey,
       );
       setResults(response.data || []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "上传失败");
+      setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setLoading(false);
     }
@@ -48,8 +44,8 @@ export function UploadsTab({ apiKey }: { apiKey: string }) {
       <div className="admin-card">
         <div className="admin-card-header">
           <div>
-            <h3>文件上传</h3>
-            <p>使用当前登录的 API Key 直接调用后端 /v1/uploads，由服务端转传到 OSS</p>
+            <h3><Upload size={16} className="inline mr-1" />{t("uploads.title")}</h3>
+            <p>{t("uploads.subtitle")}</p>
           </div>
         </div>
         <div className="admin-card-body flex flex-col gap-5">
@@ -60,8 +56,8 @@ export function UploadsTab({ apiKey }: { apiKey: string }) {
           />
 
           <div className="flex gap-6 text-sm text-[var(--text-secondary)]">
-            <span>已选文件: <strong className="text-[var(--text)]">{files.length}</strong></span>
-            <span>总大小: <strong className="text-[var(--text)]">{formatSize(totalSize)}</strong></span>
+            <span>{t("uploads.selectFiles")}: <strong className="text-[var(--text)]">{files.length}</strong></span>
+            <span>{t("uploads.totalSize")}: <strong className="text-[var(--text)]">{formatSize(totalSize)}</strong></span>
           </div>
 
           <div className="flex gap-3">
@@ -70,7 +66,8 @@ export function UploadsTab({ apiKey }: { apiKey: string }) {
               disabled={!files.length || loading}
               onClick={() => void submitUploads()}
             >
-              {loading ? "上传中..." : "开始上传"}
+              <FileUp size={16} />
+              {loading ? t("uploads.uploading") : t("uploads.upload")}
             </button>
             <button
               className="admin-btn admin-btn-secondary"
@@ -81,7 +78,8 @@ export function UploadsTab({ apiKey }: { apiKey: string }) {
                 setError("");
               }}
             >
-              清空
+              <X size={16} />
+              {t("common.close")}
             </button>
           </div>
 
@@ -99,7 +97,7 @@ export function UploadsTab({ apiKey }: { apiKey: string }) {
                 <span className="text-xs text-[var(--text-secondary)]">{formatSize(file.size)}</span>
               </div>
             ))}
-            {!files.length ? <p className="text-sm text-[var(--text-muted)]">暂未选择文件</p> : null}
+            {!files.length ? <p className="text-sm text-[var(--text-muted)]">{t("uploads.noFiles")}</p> : null}
           </div>
         </div>
       </div>
@@ -107,18 +105,18 @@ export function UploadsTab({ apiKey }: { apiKey: string }) {
       <div className="admin-card">
         <div className="admin-card-header">
           <div>
-            <h3>上传结果与接口说明</h3>
-            <p>可直接复制返回的 OSS URL，也能拿 file_id 做后续关联</p>
+            <h3><Link2 size={16} className="inline mr-1" />{t("uploads.resultTitle")}</h3>
+            <p>{t("uploads.resultSubtitle")}</p>
           </div>
         </div>
         <div className="admin-card-body flex flex-col gap-5">
           <div className="flex flex-col gap-1">
-            <EndpointItem method="POST" path="/v1/uploads" summary="统一文件/图片/视频上传接口，支持 multipart、raw body、JSON base64。" />
-            <EndpointItem method="POST" path="/v1/files/upload" summary="/v1/uploads 的兼容别名。" />
+            <EndpointItem method="POST" path="/v1/uploads" summary="Unified file upload, supports multipart, raw body, JSON base64." />
+            <EndpointItem method="POST" path="/v1/files/upload" summary="Alias for /v1/uploads." />
           </div>
 
           <pre className="admin-code">{`curl -X POST /v1/uploads \\
-  -H "Authorization: Bearer ${apiKey ? "***已登录***" : "sk-admin"}" \\
+  -H "Authorization: Bearer ${apiKey ? "***" : "sk-admin"}" \\
   -F "files=@demo.png" \\
   -F "files=@demo.mp4"`}</pre>
 
@@ -130,7 +128,7 @@ export function UploadsTab({ apiKey }: { apiKey: string }) {
                   <span className="text-xs text-[var(--text-secondary)]">{formatSize(item.size)}</span>
                 </div>
                 <div className="flex flex-col gap-1 text-xs text-[var(--text-secondary)]">
-                  <span>类型: {item.content_type}</span>
+                  <span>Type: {item.content_type}</span>
                   <span>file_id: <span className="mono">{item.file_id}</span></span>
                   <a
                     className="text-[var(--primary)] hover:underline truncate"
@@ -143,7 +141,7 @@ export function UploadsTab({ apiKey }: { apiKey: string }) {
                 </div>
               </div>
             ))}
-            {!results.length ? <p className="text-sm text-[var(--text-muted)]">上传成功后，结果会显示在这里</p> : null}
+            {!results.length ? <p className="text-sm text-[var(--text-muted)]">Results appear here after upload.</p> : null}
           </div>
         </div>
       </div>
@@ -152,14 +150,8 @@ export function UploadsTab({ apiKey }: { apiKey: string }) {
 }
 
 function formatSize(size: number) {
-  if (size < 1024) {
-    return `${size} B`;
-  }
-  if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(1)} KB`;
-  }
-  if (size < 1024 * 1024 * 1024) {
-    return `${(size / 1024 / 1024).toFixed(1)} MB`;
-  }
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
   return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }

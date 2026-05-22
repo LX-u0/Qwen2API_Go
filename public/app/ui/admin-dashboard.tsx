@@ -2,6 +2,7 @@
 
 import {
   LayoutDashboard,
+  Monitor,
   Users,
   Settings,
   Brain,
@@ -17,8 +18,11 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
+  Globe,
+  Sparkles,
 } from "lucide-react";
 import { Input } from "@heroui/react";
+import { useTranslation } from "react-i18next";
 import { useAdminConsole } from "./hooks/use-admin-console";
 import { AccountsTab } from "./components/accounts-tab";
 import { AssetGenerationTab } from "./components/asset-generation-tab";
@@ -28,24 +32,36 @@ import { OverviewTab } from "./components/overview-tab";
 import { PromptsTab } from "./components/prompts-tab";
 import { SettingsTab } from "./components/settings-tab";
 import { UploadsTab } from "./components/uploads-tab";
+import { DataScreenTab } from "./components/datascreen-tab";
 import { formatCompactNumber } from "./components/dashboard-charts";
 import { PROMPT_IDS, promptValue } from "./prompts";
 import type { TabKey } from "./types";
+import { useState } from "react";
 
-const NAV_ITEMS: Array<{ key: TabKey; label: string; icon: React.ReactNode }> = [
-  { key: "overview", label: "数据总览", icon: <LayoutDashboard size={18} /> },
-  { key: "accounts", label: "账号池", icon: <Users size={18} /> },
-  { key: "settings", label: "系统设置", icon: <Settings size={18} /> },
-  { key: "prompts", label: "提示词", icon: <MessageSquareText size={18} /> },
-  { key: "models", label: "模型能力", icon: <Brain size={18} /> },
-  { key: "uploads", label: "文件上传", icon: <Upload size={18} /> },
-  { key: "images", label: "AI 生图", icon: <ImageIcon size={18} /> },
-  { key: "videos", label: "AI 生视频", icon: <Video size={18} /> },
-  { key: "debug", label: "接口调试", icon: <Bug size={18} /> },
+const LANG_OPTIONS = [
+  { value: "zh", label: "langZh" },
+  { value: "en", label: "langEn" },
+  { value: "zh-Hant", label: "langZht" },
+  { value: "ja", label: "langJa" },
 ];
 
 export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
+  const { t } = useTranslation();
   const { state, actions } = useAdminConsole(initialTab);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const NAV_ITEMS: Array<{ key: TabKey; label: string; icon: React.ReactNode }> = [
+    { key: "overview", label: t("nav.overview"), icon: <LayoutDashboard size={18} /> },
+    { key: "datascreen", label: t("nav.datascreen"), icon: <Monitor size={18} /> },
+    { key: "accounts", label: t("nav.accounts"), icon: <Users size={18} /> },
+    { key: "settings", label: t("nav.settings"), icon: <Settings size={18} /> },
+    { key: "prompts", label: t("nav.prompts"), icon: <MessageSquareText size={18} /> },
+    { key: "models", label: t("nav.models"), icon: <Brain size={18} /> },
+    { key: "uploads", label: t("nav.uploads"), icon: <Upload size={18} /> },
+    { key: "images", label: t("nav.images"), icon: <ImageIcon size={18} /> },
+    { key: "videos", label: t("nav.videos"), icon: <Video size={18} /> },
+    { key: "debug", label: t("nav.debug"), icon: <Bug size={18} /> },
+  ];
 
   if (!state.verified) {
     return (
@@ -54,25 +70,23 @@ export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
           <div className="flex items-center gap-3 mb-6">
             <div className="admin-sidebar-logo">Q2</div>
             <div>
-              <h1>Qwen2API 管理后台</h1>
-              <p className="text-[13px] text-[var(--text-secondary)] mt-1">管理员密钥登录</p>
+              <h1>{t("appName")}</h1>
+              <p className="text-[13px] text-[var(--text-secondary)] mt-1">{t("login.title")}</p>
             </div>
           </div>
 
           <div className="flex flex-col gap-4">
             <Input
-              placeholder="输入管理员 API Key"
+              placeholder={t("login.placeholder")}
               type="password"
               value={state.apiKeyInput}
               onChange={(e) => actions.setApiKeyInput(e.target.value)}
               className="w-full"
             />
             <div className="flex gap-3">
-              <button
-                className="admin-btn admin-btn-primary flex-1"
-                onClick={() => void actions.verifyAdmin()}
-              >
-                进入管理台
+              <button className="admin-btn admin-btn-primary flex-1" onClick={() => void actions.verifyAdmin()}>
+                <Sparkles size={16} />
+                {t("login.enter")}
               </button>
               <button
                 className="admin-btn admin-btn-secondary"
@@ -83,7 +97,7 @@ export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
                   }
                 }}
               >
-                清空
+                {t("login.clear")}
               </button>
             </div>
           </div>
@@ -111,22 +125,32 @@ export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
   return (
     <div className="admin-root">
       {state.toast ? (
-        <div className={`admin-toast ${state.toast.type}`}>
-          {state.toast.message}
-        </div>
+        <div className={`admin-toast ${state.toast.type}`}>{state.toast.message}</div>
       ) : null}
 
+      {/* Mobile overlay */}
+      <div
+        className={`admin-sidebar-overlay ${mobileMenuOpen ? "open" : ""}`}
+        onClick={() => setMobileMenuOpen(false)}
+      />
+
       {/* Sidebar */}
-      <aside className={`admin-sidebar ${state.sidebarCollapsed ? "collapsed" : ""}`}>
+      <aside className={`admin-sidebar ${state.sidebarCollapsed ? "collapsed" : ""} ${mobileMenuOpen ? "mobile-open" : ""}`}>
         <div className="admin-sidebar-header">
           <div className="admin-sidebar-logo">Q2</div>
-          <span className="admin-sidebar-title">Qwen2API</span>
+          <span className="admin-sidebar-title">{t("appName")}</span>
           <button
-            className="admin-btn admin-btn-ghost admin-btn-sm ml-auto"
+            className="admin-btn admin-btn-ghost admin-btn-sm ml-auto hidden lg:flex"
             onClick={actions.toggleSidebar}
             title={state.sidebarCollapsed ? "展开" : "收起"}
           >
             {state.sidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
+          <button
+            className="admin-btn admin-btn-ghost admin-btn-sm ml-auto lg:hidden"
+            onClick={() => setMobileMenuOpen(false)}
+          >
+            <ChevronLeft size={16} />
           </button>
         </div>
 
@@ -136,7 +160,10 @@ export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
               key={item.key}
               type="button"
               className={`admin-nav-item ${state.activeTab === item.key ? "active" : ""}`}
-              onClick={() => actions.setActiveTab(item.key)}
+              onClick={() => {
+                actions.setActiveTab(item.key);
+                setMobileMenuOpen(false);
+              }}
               title={item.label}
             >
               {item.icon}
@@ -148,15 +175,29 @@ export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
         <div className="admin-sidebar-footer">
           <button className="admin-nav-item" onClick={actions.toggleTheme}>
             {state.themeMode === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-            <span>{state.themeMode === "dark" ? "浅色模式" : "深色模式"}</span>
+            <span>{state.themeMode === "dark" ? t("common.themeLight") : t("common.themeDark")}</span>
           </button>
           <button className="admin-nav-item" onClick={() => void actions.refreshShell()}>
             <RefreshCw size={18} className={state.loadingShell ? "animate-spin" : ""} />
-            <span>{state.loadingShell ? "刷新中..." : "刷新数据"}</span>
+            <span>{state.loadingShell ? t("common.refreshing") : t("common.refresh")}</span>
           </button>
+          <div className="admin-nav-item" style={{ cursor: "default" }}>
+            <Globe size={18} />
+            <select
+              className="lang-select flex-1"
+              value={state.language}
+              onChange={(e) => actions.changeLanguage(e.target.value)}
+            >
+              {LANG_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {t(`common.${opt.label}`)}
+                </option>
+              ))}
+            </select>
+          </div>
           <button className="admin-nav-item" onClick={actions.logout}>
             <LogOut size={18} />
-            <span>退出登录</span>
+            <span>{t("common.logout")}</span>
           </button>
         </div>
       </aside>
@@ -168,28 +209,28 @@ export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
           <div className="admin-header-left">
             <button
               className="admin-btn admin-btn-ghost admin-btn-sm lg:hidden"
-              onClick={actions.toggleSidebar}
+              onClick={() => setMobileMenuOpen(true)}
             >
               <Menu size={16} />
             </button>
-            <span className="admin-page-title">{currentTab?.label || "管理后台"}</span>
+            <span className="admin-page-title">{currentTab?.label || t("appName")}</span>
           </div>
           <div className="admin-header-right">
             <div className="hidden md:flex items-center gap-6 text-sm text-[var(--text-secondary)] mr-4">
               <div className="flex flex-col items-end">
-                <span className="text-xs text-[var(--text-muted)]">业务请求</span>
+                <span className="text-xs text-[var(--text-muted)]">{t("overview.totalRequests")}</span>
                 <span className="font-semibold text-[var(--text)]">
                   {formatCompactNumber(state.overview?.analytics.totals.requests)}
                 </span>
               </div>
               <div className="flex flex-col items-end">
-                <span className="text-xs text-[var(--text-muted)]">有效账号</span>
+                <span className="text-xs text-[var(--text-muted)]">{t("overview.accountValid")}</span>
                 <span className="font-semibold text-[var(--text)]">
                   {formatCompactNumber(state.overview?.accounts.valid)}
                 </span>
               </div>
               <div className="flex flex-col items-end">
-                <span className="text-xs text-[var(--text-muted)]">模型数</span>
+                <span className="text-xs text-[var(--text-muted)]">{t("overview.modelTotal")}</span>
                 <span className="font-semibold text-[var(--text)]">
                   {formatCompactNumber(state.modelCounts.total)}
                 </span>
@@ -202,6 +243,14 @@ export function AdminDashboard({ initialTab }: { initialTab?: TabKey } = {}) {
         <main className="admin-content">
           {state.activeTab === "overview" ? (
             <OverviewTab overview={state.overview} modelCounts={state.modelCounts} />
+          ) : null}
+
+          {state.activeTab === "datascreen" ? (
+            <DataScreenTab
+              overview={state.overview}
+              modelCounts={state.modelCounts}
+              sseConnected={state.sseConnected}
+            />
           ) : null}
 
           {state.activeTab === "accounts" ? (

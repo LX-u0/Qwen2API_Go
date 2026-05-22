@@ -48,6 +48,9 @@ func ExtractAPIKey(r *http.Request) string {
 	if key := r.Header.Get("Authorization"); key != "" {
 		return key
 	}
+	if key := r.URL.Query().Get("apiKey"); key != "" {
+		return key
+	}
 	return ""
 }
 

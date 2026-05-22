@@ -122,6 +122,7 @@ func New(cfg config.Config, keyring *auth.Keyring, openAIHandler *openai.Handler
 	handle("/api/refreshAllAccounts", "admin", ensureMethod(http.MethodPost, withAdminKey(adminHandler.HandleRefreshAllAccounts)))
 	handle("/api/forceRefreshAllAccounts", "admin", ensureMethod(http.MethodPost, withAdminKey(adminHandler.HandleForceRefreshAllAccounts)))
 	handle("/api/batchTasks/", "admin", ensureMethod(http.MethodGet, withAdminKey(adminHandler.HandleBatchTask)))
+	handle("/api/dashboard/stream", "admin", ensureMethod(http.MethodGet, withAdminKey(adminHandler.HandleDashboardStream)))
 
 	publicDir := filepath.Join("public", "out")
 	staticFS := http.FileServer(http.Dir(publicDir))

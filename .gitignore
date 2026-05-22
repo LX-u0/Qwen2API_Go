@@ -7,7 +7,4 @@ data
 .play*
 /data.json
 /docs
-*.py
 *.log
-
-test

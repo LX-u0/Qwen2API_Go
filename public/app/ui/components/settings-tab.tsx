@@ -1,14 +1,16 @@
+"use client";
+
+import { useTranslation } from "react-i18next";
 import type { Dispatch, SetStateAction } from "react";
 import type { SettingsResponse } from "../types";
 import { Input, Switch } from "@heroui/react";
+import { Save, Trash2, RefreshCw, RotateCcw, KeyRound, Settings2, SlidersHorizontal } from "lucide-react";
 
 type SwitchValue = boolean | { target?: { checked?: boolean } };
 type BooleanSettingKey = "autoRefresh" | "outThink" | "simpleModelMap";
 
 function selectedSwitchValue(value: SwitchValue) {
-  if (typeof value === "boolean") {
-    return value;
-  }
+  if (typeof value === "boolean") return value;
   return value.target?.checked ?? false;
 }
 
@@ -41,11 +43,13 @@ export function SettingsTab({
   saveSettings: (path: string, body: Record<string, unknown>, successMessage: string) => Promise<void>;
   saveChatCleanupMode: (mode: number) => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const enabledStrategies = [
     settings?.autoRefresh ?? false,
     settings?.outThink ?? false,
     settings?.simpleModelMap ?? false,
   ].filter(Boolean).length;
+
   const setBooleanSetting = (key: BooleanSettingKey, value: SwitchValue) => {
     const selected = selectedSwitchValue(value);
     setSettings((current) => (current ? { ...current, [key]: selected } : current));
@@ -56,24 +60,24 @@ export function SettingsTab({
       {/* Overview stats */}
       <div className="admin-stat-grid">
         <div className="admin-stat-card primary">
-          <div className="label">已启用策略</div>
+          <div className="label">{t("settings.enabledStrategies")}</div>
           <div className="value">{enabledStrategies}/3</div>
-          <div className="desc">自动刷新、思考输出、模型映射三个核心开关的当前启用数</div>
+          <div className="desc">Auto refresh, thinking output, model mapping</div>
         </div>
         <div className="admin-stat-card primary">
-          <div className="label">普通 Key 数量</div>
+          <div className="label">{t("settings.regularKeyCount")}</div>
           <div className="value">{settings?.regularKeys.length ?? 0}</div>
-          <div className="desc">当前系统里登记的常规访问密钥数量</div>
+          <div className="desc">Registered regular access keys</div>
         </div>
         <div className="admin-stat-card primary">
-          <div className="label">刷新周期</div>
+          <div className="label">{t("settings.refreshInterval")}</div>
           <div className="value">{settings?.autoRefreshInterval ?? 21600}s</div>
-          <div className="desc">账号令牌自动刷新的时间间隔</div>
+          <div className="desc">Auto token refresh interval</div>
         </div>
         <div className="admin-stat-card primary">
-          <div className="label">搜索模式</div>
-          <div className="value">{settings?.searchInfoMode === "table" ? "表格模式" : "文本模式"}</div>
-          <div className="desc">控制搜索结果在系统中的默认呈现方式</div>
+          <div className="label">{t("settings.searchMode")}</div>
+          <div className="value">{settings?.searchInfoMode === "table" ? "Table" : "Text"}</div>
+          <div className="desc">Default search result presentation</div>
         </div>
       </div>
 
@@ -83,114 +87,75 @@ export function SettingsTab({
           <div className="admin-card">
             <div className="admin-card-header">
               <div>
-                <h3>运行策略</h3>
-                <p>把策略开关、刷新参数和模型映射收敛到主操作面板，避免信息发散</p>
+                <h3><Settings2 size={16} className="inline mr-1" />{t("settings.strategies")}</h3>
+                <p>Strategy switches, refresh params and model mapping</p>
               </div>
             </div>
             <div className="admin-card-body flex flex-col gap-6">
               <div>
-                <h4 className="text-sm font-semibold mb-1">策略开关</h4>
-                <p className="text-xs text-[var(--text-secondary)] mb-4">用卡片形式管理高频开关，降低误触和阅读成本</p>
+                <h4 className="text-sm font-semibold mb-1">Strategy Toggles</h4>
+                <p className="text-xs text-[var(--text-secondary)] mb-4">Manage high-frequency switches</p>
                 <div className="flex flex-col gap-3">
-                  <div className="admin-switch-card">
-                    <div>
-                      <strong>自动刷新账号令牌</strong>
-                      <p>按设定周期自动刷新账号 token，减少人工维护</p>
-                    </div>
-                    <div className="flex flex-col items-end gap-3">
-                      <Switch
-                        isSelected={settings?.autoRefresh ?? false}
-                        onChange={(value) => setBooleanSetting("autoRefresh", value)}
-                      >
-                        <Switch.Control>
-                          <Switch.Thumb />
-                        </Switch.Control>
-                      </Switch>
-                      <button
-                        className="admin-btn admin-btn-primary admin-btn-sm"
-                        disabled={!settings || savingSettings}
-                        onClick={() =>
-                          settings &&
-                          void saveSettings(
-                            "/api/setAutoRefresh",
-                            { autoRefresh: settings.autoRefresh, autoRefreshInterval: settings.autoRefreshInterval },
-                            "自动刷新设置已更新。"
-                          )
-                        }
-                      >
-                        保存自动刷新
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="admin-switch-card">
-                    <div>
-                      <strong>输出思考过程</strong>
-                      <p>控制是否向客户端暴露 thinking 内容</p>
-                    </div>
-                    <div className="flex flex-col items-end gap-3">
-                      <Switch
-                        isSelected={settings?.outThink ?? false}
-                        onChange={(value) => setBooleanSetting("outThink", value)}
-                      >
-                        <Switch.Control>
-                          <Switch.Thumb />
-                        </Switch.Control>
-                      </Switch>
-                      <button
-                        className="admin-btn admin-btn-ghost admin-btn-sm"
-                        disabled={!settings || savingSettings}
-                        onClick={() =>
-                          settings &&
-                          void saveSettings("/api/setOutThink", { outThink: settings.outThink }, "思考输出设置已更新。")
-                        }
-                      >
-                        保存思考输出
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="admin-switch-card">
-                    <div>
-                      <strong>简化模型映射</strong>
-                      <p>收敛变体展示，降低模型列表复杂度</p>
-                    </div>
-                    <div className="flex flex-col items-end gap-3">
-                      <Switch
-                        isSelected={settings?.simpleModelMap ?? false}
-                        onChange={(value) => setBooleanSetting("simpleModelMap", value)}
-                      >
-                        <Switch.Control>
-                          <Switch.Thumb />
-                        </Switch.Control>
-                      </Switch>
-                      <button
-                        className="admin-btn admin-btn-secondary admin-btn-sm"
-                        disabled={!settings || savingSettings}
-                        onClick={() =>
-                          settings &&
-                          void saveSettings(
-                            "/api/simple-model-map",
-                            { simpleModelMap: settings.simpleModelMap },
-                            "模型映射设置已更新。"
-                          )
-                        }
-                      >
-                        保存模型映射
-                      </button>
-                    </div>
-                  </div>
+                  <SwitchCard
+                    title={t("settings.autoRefresh")}
+                    desc={t("settings.autoRefreshDesc")}
+                    checked={settings?.autoRefresh ?? false}
+                    onChange={(v) => setBooleanSetting("autoRefresh", v)}
+                    onSave={() =>
+                      settings &&
+                      void saveSettings(
+                        "/api/setAutoRefresh",
+                        { autoRefresh: settings.autoRefresh, autoRefreshInterval: settings.autoRefreshInterval },
+                        t("settings.saveAutoRefresh"),
+                      )
+                    }
+                    saving={savingSettings}
+                    disabled={!settings}
+                    saveLabel={t("settings.saveAutoRefresh")}
+                  />
+                  <SwitchCard
+                    title={t("settings.outThink")}
+                    desc={t("settings.outThinkDesc")}
+                    checked={settings?.outThink ?? false}
+                    onChange={(v) => setBooleanSetting("outThink", v)}
+                    onSave={() =>
+                      settings &&
+                      void saveSettings("/api/setOutThink", { outThink: settings.outThink }, t("settings.saveOutThink"))
+                    }
+                    saving={savingSettings}
+                    disabled={!settings}
+                    saveLabel={t("settings.saveOutThink")}
+                    variant="ghost"
+                  />
+                  <SwitchCard
+                    title={t("settings.simpleModelMap")}
+                    desc={t("settings.simpleModelMapDesc")}
+                    checked={settings?.simpleModelMap ?? false}
+                    onChange={(v) => setBooleanSetting("simpleModelMap", v)}
+                    onSave={() =>
+                      settings &&
+                      void saveSettings(
+                        "/api/simple-model-map",
+                        { simpleModelMap: settings.simpleModelMap },
+                        t("settings.saveModelMap"),
+                      )
+                    }
+                    saving={savingSettings}
+                    disabled={!settings}
+                    saveLabel={t("settings.saveModelMap")}
+                    variant="secondary"
+                  />
                 </div>
               </div>
 
               <div>
-                <h4 className="text-sm font-semibold mb-1">运行参数</h4>
-                <p className="text-xs text-[var(--text-secondary)] mb-4">把刷新周期、并发数和搜索模式收敛到统一字段区</p>
+                <h4 className="text-sm font-semibold mb-1">{t("settings.runParams")}</h4>
+                <p className="text-xs text-[var(--text-secondary)] mb-4">Runtime parameters</p>
                 <div className="admin-form-grid">
                   <div className="admin-form-group">
-                    <label>自动刷新间隔（秒）</label>
+                    <label>{t("settings.refreshIntervalLabel")}</label>
                     <Input
-                      placeholder="自动刷新间隔（秒）"
+                      placeholder="Refresh interval (s)"
                       type="number"
                       value={String(settings?.autoRefreshInterval ?? 21600)}
                       onChange={(e) =>
@@ -205,17 +170,18 @@ export function SettingsTab({
                         void saveSettings(
                           "/api/setAutoRefresh",
                           { autoRefresh: settings.autoRefresh, autoRefreshInterval: settings.autoRefreshInterval },
-                          "自动刷新设置已更新。"
+                          t("settings.saveAutoRefresh"),
                         )
                       }
                     >
-                      保存刷新参数
+                      <Save size={14} />
+                      {t("settings.saveRefreshParams")}
                     </button>
                   </div>
                   <div className="admin-form-group">
-                    <label>批量登录并发</label>
+                    <label>{t("settings.batchConcurrency")}</label>
                     <Input
-                      placeholder="批量登录并发"
+                      placeholder="Batch concurrency"
                       type="number"
                       value={String(settings?.batchLoginConcurrency ?? 5)}
                       onChange={(e) =>
@@ -230,15 +196,16 @@ export function SettingsTab({
                         void saveSettings(
                           "/api/setBatchLoginConcurrency",
                           { batchLoginConcurrency: settings.batchLoginConcurrency },
-                          "批量登录并发已更新。"
+                          t("settings.saveConcurrency"),
                         )
                       }
                     >
-                      保存并发
+                      <Save size={14} />
+                      {t("settings.saveConcurrency")}
                     </button>
                   </div>
                   <div className="admin-form-group">
-                    <label>搜索信息模式</label>
+                    <label>{t("settings.searchInfoMode")}</label>
                     <select
                       className="admin-select"
                       value={settings?.searchInfoMode ?? "text"}
@@ -246,8 +213,8 @@ export function SettingsTab({
                         setSettings((c) => (c ? { ...c, searchInfoMode: e.target.value as "table" | "text" } : c))
                       }
                     >
-                      <option value="text">搜索文本模式</option>
-                      <option value="table">搜索表格模式</option>
+                      <option value="text">Text</option>
+                      <option value="table">Table</option>
                     </select>
                     <button
                       className="admin-btn admin-btn-secondary admin-btn-sm self-start mt-1"
@@ -257,15 +224,16 @@ export function SettingsTab({
                         void saveSettings(
                           "/api/search-info-mode",
                           { searchInfoMode: settings.searchInfoMode },
-                          "搜索模式已更新。"
+                          t("settings.saveSearchMode"),
                         )
                       }
                     >
-                      保存搜索模式
+                      <Save size={14} />
+                      {t("settings.saveSearchMode")}
                     </button>
                   </div>
                   <div className="admin-form-group">
-                    <label>对话清理模式</label>
+                    <label>{t("settings.chatCleanupMode")}</label>
                     <select
                       className="admin-select"
                       value={String(settings?.chatCleanupMode ?? 0)}
@@ -273,19 +241,17 @@ export function SettingsTab({
                         setSettings((c) => (c ? { ...c, chatCleanupMode: Number(e.target.value) } : c))
                       }
                     >
-                      <option value="0">不删除</option>
-                      <option value="1">仅删除程序创建的对话</option>
-                      <option value="2">删除全部过期对话</option>
+                      <option value="0">{t("settings.cleanupNone")}</option>
+                      <option value="1">{t("settings.cleanupProgram")}</option>
+                      <option value="2">{t("settings.cleanupAll")}</option>
                     </select>
                     <button
                       className="admin-btn admin-btn-secondary admin-btn-sm self-start mt-1"
                       disabled={!settings || savingSettings}
-                      onClick={() =>
-                        settings &&
-                        void saveChatCleanupMode(settings.chatCleanupMode)
-                      }
+                      onClick={() => settings && void saveChatCleanupMode(settings.chatCleanupMode)}
                     >
-                      保存清理模式
+                      <Save size={14} />
+                      {t("settings.saveCleanupMode")}
                     </button>
                   </div>
                 </div>
@@ -299,35 +265,36 @@ export function SettingsTab({
           <div className="admin-card">
             <div className="admin-card-header">
               <div>
-                <h3>访问密钥</h3>
-                <p>统一管理普通 API Key，避免和运行策略混在一起</p>
+                <h3><KeyRound size={16} className="inline mr-1" />{t("settings.apiKeys")}</h3>
+                <p>Manage regular API Keys separately</p>
               </div>
             </div>
             <div className="admin-card-body flex flex-col gap-4">
               <div className="flex gap-3">
                 <Input
-                  placeholder="新增普通 API Key"
+                  placeholder={t("settings.addKey")}
                   value={addKeyValue}
                   onChange={(e) => setAddKeyValue(e.target.value)}
                   className="flex-1"
                 />
                 <button className="admin-btn admin-btn-primary" onClick={() => void addRegularKey()}>
-                  添加 Key
+                  <PlusIcon />
+                  {t("settings.addKeyBtn")}
                 </button>
               </div>
 
               <div>
-                <h4 className="text-sm font-semibold mb-3">现有 Key 列表</h4>
+                <h4 className="text-sm font-semibold mb-3">{t("settings.existingKeys")}</h4>
                 {settings?.regularKeys.map((key) => (
                   <div className="admin-key-row" key={key}>
                     <span className="truncate">{key}</span>
                     <button className="admin-btn admin-btn-danger admin-btn-sm" onClick={() => void deleteRegularKey(key)}>
-                      删除
+                      <Trash2 size={14} />
                     </button>
                   </div>
                 ))}
                 {!settings?.regularKeys.length ? (
-                  <p className="text-sm text-[var(--text-muted)]">当前没有普通 API Key</p>
+                  <p className="text-sm text-[var(--text-muted)]">{t("settings.noKeys")}</p>
                 ) : null}
               </div>
             </div>
@@ -337,15 +304,15 @@ export function SettingsTab({
           <div className="admin-card">
             <div className="admin-card-header">
               <div>
-                <h3>刷新与热更新</h3>
-                <p>账号刷新和 .env 重载放在同一组，方便运维操作</p>
+                <h3><SlidersHorizontal size={16} className="inline mr-1" />{t("settings.refreshAndReload")}</h3>
+                <p>Account refresh and .env reload</p>
               </div>
             </div>
             <div className="admin-card-body flex flex-col gap-5">
               <div className="admin-form-group">
-                <label>即将过期阈值（小时）</label>
+                <label>{t("settings.thresholdHours")}</label>
                 <Input
-                  placeholder="即将过期阈值（小时）"
+                  placeholder="Threshold (hours)"
                   type="number"
                   value={thresholdHours}
                   onChange={(e) => setThresholdHours(e.target.value)}
@@ -354,37 +321,96 @@ export function SettingsTab({
 
               <div className="flex gap-3">
                 <button className="admin-btn admin-btn-secondary flex-1" onClick={() => void refreshAllAccounts(false)}>
-                  阈值刷新
+                  <RefreshCw size={14} />
+                  {t("settings.thresholdRefresh")}
                 </button>
                 <button className="admin-btn admin-btn-danger flex-1" onClick={() => void refreshAllAccounts(true)}>
-                  强制全刷
+                  <RotateCcw size={14} />
+                  {t("settings.forceRefresh")}
                 </button>
               </div>
 
               <div className="border-t border-[var(--border)] pt-4">
-                <h4 className="text-sm font-semibold mb-1">配置热更新</h4>
+                <h4 className="text-sm font-semibold mb-1">{t("settings.hotReload")}</h4>
                 <p className="text-xs text-[var(--text-secondary)] mb-3">
-                  后台保存会立即生效并写入 .env；手动改 .env 后可在这里重载
+                  Reload .env after manual edits
                 </p>
                 <button
                   className="admin-btn admin-btn-primary"
                   disabled={savingSettings}
                   onClick={() => void reloadRuntimeConfig()}
                 >
-                  重新加载 .env
+                  <RotateCcw size={14} />
+                  {t("settings.reloadEnv")}
                 </button>
               </div>
 
               <div className="p-4 rounded-lg border border-[var(--danger)] bg-[var(--danger-light)] text-sm">
-                <strong className="text-[var(--danger)] block mb-1">操作提醒</strong>
-                <p className="text-[var(--text-secondary)]">
-                  阈值刷新会优先处理接近过期的账号；强制全刷会对整个账号池重新登录；.env 重载只影响运行参数，不会重建已初始化组件
-                </p>
+                <strong className="text-[var(--danger)] block mb-1">{t("settings.opsReminder")}</strong>
+                <p className="text-[var(--text-secondary)]">{t("settings.opsReminderText")}</p>
               </div>
             </div>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function SwitchCard({
+  title,
+  desc,
+  checked,
+  onChange,
+  onSave,
+  saving,
+  disabled,
+  saveLabel,
+  variant = "primary",
+}: {
+  title: string;
+  desc: string;
+  checked: boolean;
+  onChange: (v: SwitchValue) => void;
+  onSave: () => void;
+  saving: boolean;
+  disabled: boolean;
+  saveLabel: string;
+  variant?: "primary" | "secondary" | "ghost";
+}) {
+  const variantClass =
+    variant === "primary"
+      ? "admin-btn-primary"
+      : variant === "secondary"
+      ? "admin-btn-secondary"
+      : "admin-btn-ghost";
+
+  return (
+    <div className="admin-switch-card">
+      <div>
+        <strong>{title}</strong>
+        <p>{desc}</p>
+      </div>
+      <div className="flex flex-col items-end gap-3">
+        <Switch isSelected={checked} onChange={(value) => onChange(value)}>
+          <Switch.Control>
+            <Switch.Thumb />
+          </Switch.Control>
+        </Switch>
+        <button className={`admin-btn ${variantClass} admin-btn-sm`} disabled={disabled || saving} onClick={onSave}>
+          <Save size={14} />
+          {saveLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
   );
 }

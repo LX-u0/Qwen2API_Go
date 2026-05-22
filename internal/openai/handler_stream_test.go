@@ -31,7 +31,7 @@ func TestHandleStreamDoesNotFragmentWhenNoTools(t *testing.T) {
 	}, "\n")
 
 	recorder := httptest.NewRecorder()
-	handler.handleStream(recorder, strings.NewReader(upstream), "qwen3.6-plus", "qwen3.6-plus", nil, 1)
+	handler.handleStream(recorder, strings.NewReader(upstream), "qwen3.6-plus", "qwen3.6-plus", "user@example.com", nil, 1)
 
 	body := recorder.Body.String()
 	lines := strings.Split(body, "\n\n")
@@ -91,7 +91,7 @@ func TestHandleStreamHidesThinkingSummaryByDefault(t *testing.T) {
 	}, "\n")
 
 	recorder := httptest.NewRecorder()
-	handler.handleStream(recorder, strings.NewReader(upstream), "qwen3.6-plus", "qwen3.6-plus", nil, 1)
+	handler.handleStream(recorder, strings.NewReader(upstream), "qwen3.6-plus", "qwen3.6-plus", "user@example.com", nil, 1)
 
 	body := recorder.Body.String()
 	if strings.Contains(body, "回应用户的问候并主动提供帮助") || strings.Contains(body, "我感知到用户重复发送了简单的问候。") {
@@ -123,14 +123,20 @@ func TestHandleStreamIncludesThinkingSummaryWhenEnabled(t *testing.T) {
 	}, "\n")
 
 	recorder := httptest.NewRecorder()
-	handler.handleStream(recorder, strings.NewReader(upstream), "qwen3.6-plus", "qwen3.6-plus", nil, 1)
+	handler.handleStream(recorder, strings.NewReader(upstream), "qwen3.6-plus", "qwen3.6-plus", "user@example.com", nil, 1)
 
 	body := recorder.Body.String()
 	if !strings.Contains(body, "回应用户的问候并主动提供帮助") || !strings.Contains(body, "我感知到用户重复发送了简单的问候。") {
 		t.Fatalf("stream body missing thinking summary: %s", body)
 	}
-	if !strings.Contains(body, "\\u003c/think\\u003e\\n你好") {
-		t.Fatalf("stream body missing answer after think: %s", body)
+	if !strings.Contains(body, `"reasoning_content"`) {
+		t.Fatalf("stream body missing reasoning_content field: %s", body)
+	}
+	if strings.Contains(body, "\\u003cthink\\u003e") || strings.Contains(body, "\\u003c/think\\u003e") {
+		t.Fatalf("stream body leaked think tags: %s", body)
+	}
+	if !strings.Contains(body, `"content":"你好"`) {
+		t.Fatalf("stream body missing answer content: %s", body)
 	}
 }
 

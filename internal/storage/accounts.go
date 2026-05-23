@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -67,22 +66,16 @@ func NewAccountStore(cfg config.Config) (AccountStore, error) {
 	case "file":
 		return &fileStore{path: filepath.Join("data", "data.json")}, nil
 	case "redis":
-		if strings.TrimSpace(cfg.RedisURL) == "" {
-			return nil, errors.New("DATA_SAVE_MODE=redis 时必须提供 REDIS_URL")
-		}
-		opts, err := redis.ParseURL(cfg.RedisURL)
+		redisURL, err := redisURLFromConfig(cfg)
 		if err != nil {
-			return nil, fmt.Errorf("解析 REDIS_URL 失败: %w", err)
+			return nil, err
 		}
-		opts.MaxRetries = 3
-		opts.MinRetryBackoff = 200 * time.Millisecond
-		opts.MaxRetryBackoff = 3 * time.Second
-		opts.DialTimeout = 10 * time.Second
-		opts.ReadTimeout = 15 * time.Second
-		opts.WriteTimeout = 15 * time.Second
-		opts.ConnMaxIdleTime = 45 * time.Second
+		client, err := newRedisClient(redisURL)
+		if err != nil {
+			return nil, err
+		}
 		return &redisStore{
-			client: redis.NewClient(opts),
+			client: client,
 		}, nil
 	default:
 		return nil, errors.New("不支持的数据保存模式: " + cfg.DataSaveMode)
@@ -357,8 +350,4 @@ func (s *redisStore) scanUserKeys(ctx context.Context) ([]string, error) {
 		}
 	}
 	return keys, nil
-}
-
-func redisContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 20*time.Second)
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/redis/go-redis/v9"
 
@@ -40,21 +39,15 @@ func NewConversationStore(cfg config.Config) (ConversationStore, error) {
 	case "file":
 		return &fileStore{path: filepathForData(cfg)}, nil
 	case "redis":
-		if strings.TrimSpace(cfg.RedisURL) == "" {
-			return nil, errors.New("DATA_SAVE_MODE=redis 时必须提供 REDIS_URL")
-		}
-		opts, err := redis.ParseURL(cfg.RedisURL)
+		redisURL, err := redisURLFromConfig(cfg)
 		if err != nil {
 			return nil, err
 		}
-		opts.MaxRetries = 3
-		opts.MinRetryBackoff = 200 * time.Millisecond
-		opts.MaxRetryBackoff = 3 * time.Second
-		opts.DialTimeout = 10 * time.Second
-		opts.ReadTimeout = 15 * time.Second
-		opts.WriteTimeout = 15 * time.Second
-		opts.ConnMaxIdleTime = 45 * time.Second
-		return &redisStore{client: redis.NewClient(opts)}, nil
+		client, err := newRedisClient(redisURL)
+		if err != nil {
+			return nil, err
+		}
+		return &redisStore{client: client}, nil
 	default:
 		return nil, errors.New("不支持的数据保存模式: " + cfg.DataSaveMode)
 	}

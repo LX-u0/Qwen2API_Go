@@ -4,9 +4,12 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
+
+	"qwen2api/internal/config"
 )
 
 func TestFileAndRedisStoresHaveConsistentSemantics(t *testing.T) {
@@ -77,6 +80,66 @@ func TestFileAndRedisStoresHaveConsistentSemantics(t *testing.T) {
 				t.Fatalf("expected empty accounts after overwrite, got %#v", got)
 			}
 		})
+	}
+}
+
+func TestRedisConstructorsAcceptBareAddress(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis.Run() error = %v", err)
+	}
+	defer mr.Close()
+
+	cfg := config.Config{
+		DataSaveMode: "redis",
+		RedisURL:     mr.Addr(),
+	}
+
+	if _, err := NewAccountStore(cfg); err != nil {
+		t.Fatalf("NewAccountStore() error = %v", err)
+	}
+	if _, err := NewConversationStore(cfg); err != nil {
+		t.Fatalf("NewConversationStore() error = %v", err)
+	}
+	if _, err := NewChatTracker(cfg); err != nil {
+		t.Fatalf("NewChatTracker() error = %v", err)
+	}
+}
+
+func TestChatTrackerDoesNotUseRedisOutsideRedisMode(t *testing.T) {
+	cfg := config.Config{
+		DataSaveMode: "file",
+		RedisURL:     "127.0.0.1:0",
+	}
+
+	tracker, err := NewChatTracker(cfg)
+	if err != nil {
+		t.Fatalf("NewChatTracker() error = %v", err)
+	}
+	if _, ok := tracker.(*memoryChatTracker); !ok {
+		t.Fatalf("NewChatTracker() = %T, want *memoryChatTracker", tracker)
+	}
+}
+
+func TestParseRedisOptionsNormalizesURLAndPreservesQuery(t *testing.T) {
+	opts, err := parseRedisOptions("localhost:6380/2?read_timeout=1s&max_retries=0")
+	if err != nil {
+		t.Fatalf("parseRedisOptions() error = %v", err)
+	}
+	if opts.Addr != "localhost:6380" {
+		t.Fatalf("Addr = %q, want localhost:6380", opts.Addr)
+	}
+	if opts.DB != 2 {
+		t.Fatalf("DB = %d, want 2", opts.DB)
+	}
+	if opts.ReadTimeout != time.Second {
+		t.Fatalf("ReadTimeout = %s, want 1s", opts.ReadTimeout)
+	}
+	if opts.MaxRetries != 0 {
+		t.Fatalf("MaxRetries = %d, want 0", opts.MaxRetries)
+	}
+	if got, want := redisPingTimeout(opts), 26*time.Second; got != want {
+		t.Fatalf("redisPingTimeout() = %s, want %s", got, want)
 	}
 }
 

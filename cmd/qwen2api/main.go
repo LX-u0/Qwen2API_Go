@@ -52,7 +52,7 @@ func main() {
 	qwenClient := qwen.NewClient(cfg, logger)
 	accountService := account.NewService(cfg, runtime, store, qwenClient, logger)
 	conversationSessions := openai.NewConversationSessionService(conversationStore, logger)
-	chatTracker, err := storage.NewChatTracker(cfg.RedisURL)
+	chatTracker, err := storage.NewChatTracker(cfg)
 	if err != nil {
 		logger.WarnModule("APP", "初始化对话追踪器失败: %v", err)
 		chatTracker = nil

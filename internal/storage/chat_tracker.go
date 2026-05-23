@@ -3,12 +3,13 @@ package storage
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"qwen2api/internal/config"
 )
 
 // ChatTracker records which chats were created/used by the program per account.
@@ -25,22 +26,19 @@ type ChatUsage struct {
 	UpdatedAt    int64  `json:"updated_at"`
 }
 
-// NewChatTracker creates a ChatTracker. If redisURL is provided, uses Redis;
-// otherwise falls back to an in-memory map.
-func NewChatTracker(redisURL string) (ChatTracker, error) {
-	if strings.TrimSpace(redisURL) != "" {
-		opts, err := redis.ParseURL(redisURL)
+// NewChatTracker creates a ChatTracker. Redis is used only in redis save mode;
+// otherwise the tracker stays in memory.
+func NewChatTracker(cfg config.Config) (ChatTracker, error) {
+	if isRedisMode(cfg) {
+		redisURL, err := redisURLFromConfig(cfg)
 		if err != nil {
-			return nil, fmt.Errorf("解析 REDIS_URL 失败: %w", err)
+			return nil, err
 		}
-		opts.MaxRetries = 3
-		opts.MinRetryBackoff = 200 * time.Millisecond
-		opts.MaxRetryBackoff = 3 * time.Second
-		opts.DialTimeout = 10 * time.Second
-		opts.ReadTimeout = 15 * time.Second
-		opts.WriteTimeout = 15 * time.Second
-		opts.ConnMaxIdleTime = 45 * time.Second
-		return &redisChatTracker{client: redis.NewClient(opts)}, nil
+		client, err := newRedisClient(redisURL)
+		if err != nil {
+			return nil, err
+		}
+		return &redisChatTracker{client: client}, nil
 	}
 	return &memoryChatTracker{usages: map[string]int64{}}, nil
 }

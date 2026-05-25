@@ -10,7 +10,6 @@ import (
 	"unicode/utf8"
 
 	"qwen2api/internal/prompts"
-	"qwen2api/internal/toolargs"
 )
 
 type ToolSchema struct {
@@ -31,15 +30,15 @@ type ToolCall struct {
 }
 
 type InjectionResult struct {
-	Messages  []map[string]any
-	ToolNames []string
-	Policy    ToolChoicePolicy
+	Messages    []map[string]any
+	ToolNames   []string
+	ToolSchemas []ToolSchema
+	Policy      ToolChoicePolicy
 }
 
 var (
 	xmlToolCallsBlock          = regexp.MustCompile(`(?is)<(?:ml_tool_calls|tool_calls)[^>]*>(.*?)</(?:ml_tool_calls|tool_calls)>`)
 	xmlToolCallBlock           = regexp.MustCompile(`(?is)<(?:ml_tool_call|tool_call)[^>]*>(.*?)</(?:ml_tool_call|tool_call)>`)
-	xmlToolResultBlock         = regexp.MustCompile(`(?is)<(?:ml_tool_result|tool_result)[^>]*>(.*?)</(?:ml_tool_result|tool_result)>`)
 	xmlToolNameBlock           = regexp.MustCompile(`(?is)<(?:ml_tool_name|tool_name)>(.*?)</(?:ml_tool_name|tool_name)>`)
 	xmlParameters              = regexp.MustCompile(`(?is)<(?:ml_parameters|parameters)>(.*?)</(?:ml_parameters|parameters)>`)
 	xmlParameterItem           = regexp.MustCompile(`(?is)<([a-zA-Z_][\w.:-]*)>(.*?)</([a-zA-Z_][\w.:-]*)>`)
@@ -48,23 +47,19 @@ var (
 	xmlResidualTag             = regexp.MustCompile(`(?is)</?(?:ml_tool_calls|ml_tool_call|ml_tool_result|ml_tool_name|ml_tool_call_id|ml_parameters|tool_calls|tool_call|tool_result|tool_name|parameters|function_call|invoke|tool_use)\b[^>]*>`)
 	malformedToolPreludePrefix = regexp.MustCompile(`(?is)^(?:\s*<(?:ml_tool_calls|ml_tool_call|tool_calls|tool_call|function_call|invoke|tool_use|antml:function_call)\s*>\s*)+`)
 	leadingToolTagLines        = regexp.MustCompile(`(?is)^(?:\s*</?(?:ml_tool_calls|ml_tool_call|ml_tool_result|ml_tool_name|ml_tool_call_id|ml_parameters|tool_calls|tool_call|tool_result|tool_name|parameters|function_call|invoke|tool_use)\b[^>]*>\s*)+`)
-	serializedRolePrefix       = regexp.MustCompile(`(?i)^[ \t;]*(?:system|user|assistant|tool):\s*`)
-	startMarkers               = []string{"<ml_tool_calls", "<ml_tool_call", "<ml_tool_result", "<tool_calls", "<tool_call", "<tool_result", "<function_call", "<invoke", "<tool_use", "<antml:function_call"}
+	startMarkers               = []string{"<ml_tool_calls", "<ml_tool_call", "<tool_calls", "<tool_call"}
 	toolTagPairs               = []struct {
 		open  string
 		close string
-		drop  bool
 	}{
 		{open: "<ml_tool_calls", close: "</ml_tool_calls>"},
 		{open: "<ml_tool_call", close: "</ml_tool_call>"},
-		{open: "<ml_tool_result", close: "</ml_tool_result>", drop: true},
 		{open: "<tool_calls", close: "</tool_calls>"},
 		{open: "<tool_call", close: "</tool_call>"},
-		{open: "<tool_result", close: "</tool_result>", drop: true},
-		{open: "<function_call", close: "</function_call>", drop: true},
-		{open: "<invoke", close: "</invoke>", drop: true},
-		{open: "<tool_use", close: "</tool_use>", drop: true},
-		{open: "<antml:function_call", close: "</antml:function_call>", drop: true},
+		{open: "<function_call", close: "</function_call>"},
+		{open: "<invoke", close: "</invoke>"},
+		{open: "<tool_use", close: "</tool_use>"},
+		{open: "<antml:function_call", close: "</antml:function_call>"},
 	}
 )
 
@@ -87,7 +82,7 @@ func InjectPromptWithOverrides(messages []map[string]any, toolsRaw any, toolChoi
 	normalizedMessages := normalizeToolMessages(messages)
 	toolSchemas := normalizeToolSchemas(toolsRaw)
 	if len(toolSchemas) == 0 {
-		return InjectionResult{Messages: normalizedMessages}
+		return InjectionResult{Messages: normalizedMessages, ToolSchemas: toolSchemas}
 	}
 
 	toolNames := make([]string, 0, len(toolSchemas))
@@ -98,9 +93,10 @@ func InjectPromptWithOverrides(messages []map[string]any, toolsRaw any, toolChoi
 	policy := parseToolChoicePolicy(toolChoice, toolNames)
 	if !policy.Enabled {
 		return InjectionResult{
-			Messages:  normalizedMessages,
-			ToolNames: toolNames,
-			Policy:    policy,
+			Messages:    normalizedMessages,
+			ToolNames:   toolNames,
+			ToolSchemas: toolSchemas,
+			Policy:      policy,
 		}
 	}
 
@@ -128,17 +124,19 @@ func InjectPromptWithOverrides(messages []map[string]any, toolsRaw any, toolChoi
 				normalizedMessages[i]["content"] = strings.TrimSpace(current) + "\n\n" + toolPrompt
 			}
 			return InjectionResult{
-				Messages:  appendToolReminder(normalizedMessages, toolNames, policy, promptOverrides),
-				ToolNames: toolNames,
-				Policy:    policy,
+				Messages:    appendToolReminder(normalizedMessages, toolNames, policy, promptOverrides),
+				ToolNames:   toolNames,
+				ToolSchemas: toolSchemas,
+				Policy:      policy,
 			}
 		}
 	}
 
 	return InjectionResult{
-		Messages:  appendToolReminder(append([]map[string]any{{"role": "system", "content": toolPrompt}}, normalizedMessages...), toolNames, policy, promptOverrides),
-		ToolNames: toolNames,
-		Policy:    policy,
+		Messages:    appendToolReminder(append([]map[string]any{{"role": "system", "content": toolPrompt}}, normalizedMessages...), toolNames, policy, promptOverrides),
+		ToolNames:   toolNames,
+		ToolSchemas: toolSchemas,
+		Policy:      policy,
 	}
 }
 
@@ -266,13 +264,6 @@ func ParseCalls(text string) []ToolCall {
 			}
 		}
 	}
-	if len(calls) == 0 {
-		for _, block := range xmlToolResultBlock.FindAllStringSubmatch(text, -1) {
-			if strings.TrimSpace(block[1]) != "" {
-				return nil
-			}
-		}
-	}
 
 	return dedupe(calls)
 }
@@ -313,9 +304,23 @@ func removeMarkupPreserveWhitespace(text string) string {
 }
 
 func FormatOpenAIToolCalls(calls []ToolCall) []map[string]any {
+	return FormatOpenAIToolCallsWithSchemas(calls, nil)
+}
+
+func FormatOpenAIToolCallsWithSchemas(calls []ToolCall, schemas []ToolSchema) []map[string]any {
+	schemaByName := make(map[string]map[string]any, len(schemas))
+	for _, schema := range schemas {
+		name := strings.TrimSpace(schema.Name)
+		if name == "" {
+			continue
+		}
+		schemaByName[name] = schema.Parameters
+	}
+
 	result := make([]map[string]any, 0, len(calls))
 	for index, call := range calls {
-		rawArgs, _ := json.Marshal(toolargs.NormalizeJSONStrings(call.Input))
+		input := normalizeInputForSchema(call.Input, schemaByName[call.Name])
+		rawArgs, _ := json.Marshal(input)
 		result = append(result, map[string]any{
 			"index": index,
 			"id":    "call_" + randomHex(8),
@@ -327,6 +332,158 @@ func FormatOpenAIToolCalls(calls []ToolCall) []map[string]any {
 		})
 	}
 	return result
+}
+
+func normalizeInputForSchema(input map[string]any, schema map[string]any) map[string]any {
+	if len(input) == 0 {
+		return map[string]any{}
+	}
+
+	properties := schemaProperties(schema)
+	additionalSchema, _ := schema["additionalProperties"].(map[string]any)
+	normalized := make(map[string]any, len(input))
+	for key, value := range input {
+		valueSchema := properties[key]
+		if valueSchema == nil {
+			valueSchema = additionalSchema
+		}
+		normalized[key] = normalizeValueForSchema(value, valueSchema)
+	}
+	return normalized
+}
+
+func normalizeValueForSchema(value any, schema map[string]any) any {
+	if value == nil || schema == nil {
+		return value
+	}
+
+	types := schemaTypeSet(schema)
+	if len(types) == 0 {
+		switch typed := value.(type) {
+		case map[string]any:
+			return normalizeObjectForSchema(typed, schema)
+		case []any:
+			return normalizeArrayForSchema(typed, schema)
+		default:
+			return value
+		}
+	}
+	if types["string"] {
+		return value
+	}
+
+	switch typed := value.(type) {
+	case string:
+		return parseStringValueForSchema(typed, schema, types)
+	case map[string]any:
+		if types["object"] {
+			return normalizeObjectForSchema(typed, schema)
+		}
+	case []any:
+		if types["array"] {
+			return normalizeArrayForSchema(typed, schema)
+		}
+	}
+	return value
+}
+
+func parseStringValueForSchema(value string, schema map[string]any, types map[string]bool) any {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return value
+	}
+
+	if types["object"] {
+		var parsed map[string]any
+		if json.Unmarshal([]byte(trimmed), &parsed) == nil {
+			return normalizeObjectForSchema(parsed, schema)
+		}
+	}
+	if types["array"] {
+		var parsed []any
+		if json.Unmarshal([]byte(trimmed), &parsed) == nil {
+			return normalizeArrayForSchema(parsed, schema)
+		}
+	}
+	if types["boolean"] {
+		var parsed bool
+		if json.Unmarshal([]byte(trimmed), &parsed) == nil {
+			return parsed
+		}
+	}
+	if types["integer"] || types["number"] {
+		var parsed float64
+		if json.Unmarshal([]byte(trimmed), &parsed) == nil {
+			return parsed
+		}
+	}
+	if types["null"] && trimmed == "null" {
+		return nil
+	}
+	return value
+}
+
+func normalizeObjectForSchema(value map[string]any, schema map[string]any) map[string]any {
+	properties := schemaProperties(schema)
+	additionalSchema, _ := schema["additionalProperties"].(map[string]any)
+	normalized := make(map[string]any, len(value))
+	for key, item := range value {
+		itemSchema := properties[key]
+		if itemSchema == nil {
+			itemSchema = additionalSchema
+		}
+		normalized[key] = normalizeValueForSchema(item, itemSchema)
+	}
+	return normalized
+}
+
+func normalizeArrayForSchema(value []any, schema map[string]any) []any {
+	itemSchema, _ := schema["items"].(map[string]any)
+	normalized := make([]any, len(value))
+	for index, item := range value {
+		normalized[index] = normalizeValueForSchema(item, itemSchema)
+	}
+	return normalized
+}
+
+func schemaProperties(schema map[string]any) map[string]map[string]any {
+	properties := make(map[string]map[string]any)
+	rawProperties, _ := schema["properties"].(map[string]any)
+	for key, raw := range rawProperties {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		properties[key] = item
+	}
+	return properties
+}
+
+func schemaTypeSet(schema map[string]any) map[string]bool {
+	types := make(map[string]bool)
+	switch raw := schema["type"].(type) {
+	case string:
+		name := strings.TrimSpace(raw)
+		if name != "" {
+			types[name] = true
+		}
+	case []any:
+		for _, item := range raw {
+			name := strings.TrimSpace(fmt.Sprint(item))
+			if name != "" {
+				types[name] = true
+			}
+		}
+	}
+	if len(types) == 0 {
+		if _, ok := schema["properties"].(map[string]any); ok {
+			types["object"] = true
+		}
+		if _, ok := schema["items"]; ok {
+			types["array"] = true
+		}
+	}
+	return types
 }
 
 func NewStreamState() *StreamState {
@@ -537,7 +694,7 @@ func formatAssistantToolCalls(toolCalls []any) string {
 
 		parameters := make([]string, 0, len(args))
 		for key, value := range args {
-			parameters = append(parameters, fmt.Sprintf("      <%s><![CDATA[%v]]></%s>", sanitizeTagName(key), value, sanitizeTagName(key)))
+			parameters = append(parameters, fmt.Sprintf("      <%s><![CDATA[%s]]></%s>", sanitizeTagName(key), formatXMLParameterValue(value), sanitizeTagName(key)))
 		}
 		blocks = append(blocks, strings.Join([]string{
 			"  <ml_tool_call>",
@@ -626,6 +783,19 @@ func sanitizePlaceholderText(text string) string {
 
 func escapeCDATA(text string) string {
 	return strings.ReplaceAll(text, "]]>", "]]]]><![CDATA[>")
+}
+
+func formatXMLParameterValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return escapeCDATA(typed)
+	default:
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return escapeCDATA(fmt.Sprint(typed))
+		}
+		return escapeCDATA(string(raw))
+	}
 }
 
 func fallbackText(value, fallback string) string {
@@ -735,9 +905,6 @@ func tryConsumeCapture(captured string) (bool, string, []ToolCall) {
 		if len(calls) > 0 {
 			return true, stripToolPromptLeakage(RemoveMarkup(prefix + xmlBlock + suffix)), calls
 		}
-		if pair.drop {
-			return true, stripToolPromptLeakage(RemoveMarkup(prefix + xmlBlock + suffix)), nil
-		}
 		return true, stripToolPromptLeakage(stripMalformedToolPreludePrefix(prefix + xmlBlock + suffix)), nil
 	}
 
@@ -835,7 +1002,6 @@ func stripToolPromptLeakagePreserveWhitespace(text string) string {
 	for _, pattern := range patterns {
 		cleaned = pattern.ReplaceAllString(cleaned, "")
 	}
-	cleaned = serializedRolePrefix.ReplaceAllString(cleaned, "")
 	return cleaned
 }
 

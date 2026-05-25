@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"qwen2api/internal/prompts"
 	"qwen2api/internal/qwen"
@@ -28,8 +27,8 @@ type executedChatRequest struct {
 type executedChat struct {
 	Model          string
 	RequestedModel string
-	AccountEmail   string
 	ToolNames      []string
+	ToolSchemas    []toolcall.ToolSchema
 	Stream         io.ReadCloser
 }
 
@@ -147,6 +146,7 @@ func (h *Handler) prepareChatRequest(ctx context.Context, payload executedChatRe
 		LastUpstreamMessages: lastUpstreamMessages,
 		ContextHash:          computeContextHash(model, chatType, injection.ToolNames, expandedMessages),
 		ToolNames:            injection.ToolNames,
+		ToolSchemas:          injection.ToolSchemas,
 	}
 }
 
@@ -205,10 +205,7 @@ func (h *Handler) sendChatWithSession(ctx context.Context, prepared preparedChat
 }
 
 func (h *Handler) sendChatWithSessionAttempt(ctx context.Context, prepared preparedChatRequest, session storage.Account, existingChatID string, incremental bool, allowGuestRefresh bool) (*executedChat, int, error) {
-	start := time.Now()
-	accountLabel := accountLogPrefix(session.Email)
 	chatID := strings.TrimSpace(existingChatID)
-	h.logger.InfoModule("OPENAI", "AI调用开始 %s model=%s requested_model=%s chat_type=%s existing_chat=%t incremental=%t", accountLabel, prepared.Model, prepared.RequestedModel, prepared.ChatType, chatID != "", incremental)
 	if chatID == "" {
 		var err error
 		chatID, err = h.qwen.NewChat(ctx, session.Token, prepared.Model, prepared.ChatType)
@@ -216,7 +213,6 @@ func (h *Handler) sendChatWithSessionAttempt(ctx context.Context, prepared prepa
 			if allowGuestRefresh && session.IsGuest() && h.refreshGuestSession(ctx, session, err) == nil {
 				return h.sendChatWithSessionAttempt(ctx, prepared, session, "", false, false)
 			}
-			h.logger.WarnModule("OPENAI", "AI调用失败 %s stage=new_chat model=%s chat_type=%s duration=%s err=%v", accountLabel, prepared.Model, prepared.ChatType, time.Since(start), err)
 			if upstreamErr, ok := err.(*qwen.UpstreamError); ok {
 				return nil, normalizeUpstreamStatus(upstreamErr.StatusCode), err
 			}
@@ -231,7 +227,6 @@ func (h *Handler) sendChatWithSessionAttempt(ctx context.Context, prepared prepa
 
 	upstreamMessages, err := h.uploadInlineMedia(ctx, session.Token, cloneMessageList(baseMessages))
 	if err != nil {
-		h.logger.WarnModule("OPENAI", "AI调用失败 %s stage=upload_inline_media model=%s chat_id=%s duration=%s err=%v", accountLabel, prepared.Model, chatID, time.Since(start), err)
 		return nil, http.StatusBadGateway, err
 	}
 
@@ -242,7 +237,6 @@ func (h *Handler) sendChatWithSessionAttempt(ctx context.Context, prepared prepa
 		if allowGuestRefresh && session.IsGuest() && h.refreshGuestSession(ctx, session, err) == nil {
 			return h.sendChatWithSessionAttempt(ctx, prepared, session, "", false, false)
 		}
-		h.logger.WarnModule("OPENAI", "AI调用失败 %s stage=chat_completions model=%s chat_id=%s duration=%s err=%v", accountLabel, prepared.Model, chatID, time.Since(start), err)
 		if upstreamErr, ok := err.(*qwen.UpstreamError); ok {
 			return nil, normalizeUpstreamStatus(upstreamErr.StatusCode), err
 		}
@@ -253,25 +247,22 @@ func (h *Handler) sendChatWithSessionAttempt(ctx context.Context, prepared prepa
 		if allowGuestRefresh && session.IsGuest() && h.refreshGuestSession(ctx, session, err) == nil {
 			return h.sendChatWithSessionAttempt(ctx, prepared, session, "", false, false)
 		}
-		h.logger.WarnModule("OPENAI", "AI调用失败 %s stage=inspect_stream model=%s chat_id=%s duration=%s err=%v", accountLabel, prepared.Model, chatID, time.Since(start), err)
 		return nil, http.StatusBadGateway, err
 	}
 	if inspected.UpstreamError != nil {
 		if allowGuestRefresh && session.IsGuest() && h.refreshGuestSession(ctx, session, inspected.UpstreamError) == nil {
 			return h.sendChatWithSessionAttempt(ctx, prepared, session, "", false, false)
 		}
-		h.logger.WarnModule("OPENAI", "AI调用失败 %s stage=upstream_stream model=%s chat_id=%s status=%d duration=%s err=%v", accountLabel, prepared.Model, chatID, inspected.UpstreamError.StatusCode, time.Since(start), inspected.UpstreamError)
 		return nil, normalizeUpstreamStatus(inspected.UpstreamError.StatusCode), inspected.UpstreamError
 	}
 	h.accounts.ResetFailure(session.Email)
 	stream := withChatID(inspected.Stream, chatID)
-	h.logger.InfoModule("OPENAI", "AI调用上游已连接 %s model=%s chat_id=%s duration=%s", accountLabel, prepared.Model, chatID, time.Since(start))
 	return &executedChat{
 		Model:          prepared.Model,
 		RequestedModel: prepared.RequestedModel,
-		AccountEmail:   session.Email,
 		ToolNames:      prepared.ToolNames,
 		Stream:         stream,
+		ToolSchemas:    prepared.ToolSchemas,
 	}, http.StatusOK, nil
 }
 
@@ -288,14 +279,6 @@ func normalizeUpstreamStatus(status int) int {
 		return http.StatusBadGateway
 	}
 	return status
-}
-
-func accountLogPrefix(email string) string {
-	email = strings.TrimSpace(email)
-	if email == "" {
-		email = "unknown"
-	}
-	return "[" + email + "]"
 }
 
 func shouldInvalidateConversationMapping(err *qwen.UpstreamError) bool {

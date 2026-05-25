@@ -18,6 +18,7 @@ import (
 
 	"qwen2api/internal/account"
 	"qwen2api/internal/config"
+	lingmaservice "qwen2api/internal/lingma/service"
 	"qwen2api/internal/logging"
 	"qwen2api/internal/metrics"
 	"qwen2api/internal/prompts"
@@ -32,6 +33,7 @@ type Handler struct {
 	cfg         config.Config
 	runtime     *config.Runtime
 	qwen        *qwen.Client
+	lingma      *lingmaservice.Service
 	accounts    *account.Service
 	sessions    *ConversationSessionService
 	chatTracker storage.ChatTracker
@@ -39,11 +41,12 @@ type Handler struct {
 	logger      *logging.Logger
 }
 
-func NewHandler(cfg config.Config, runtime *config.Runtime, qwenClient *qwen.Client, accounts *account.Service, sessions *ConversationSessionService, chatTracker storage.ChatTracker, stats *metrics.DashboardStats, logger *logging.Logger) *Handler {
+func NewHandler(cfg config.Config, runtime *config.Runtime, qwenClient *qwen.Client, lingmaService *lingmaservice.Service, accounts *account.Service, sessions *ConversationSessionService, chatTracker storage.ChatTracker, stats *metrics.DashboardStats, logger *logging.Logger) *Handler {
 	return &Handler{
 		cfg:         cfg,
 		runtime:     runtime,
 		qwen:        qwenClient,
+		lingma:      lingmaService,
 		accounts:    accounts,
 		sessions:    sessions,
 		chatTracker: chatTracker,
@@ -866,6 +869,7 @@ func (h *Handler) listModelVariants(ctx context.Context, force bool) ([]map[stri
 			result = append(result, buildModelVariant(model, "-image-edit"))
 		}
 	}
+	result = append(result, h.listLingmaModelVariants(ctx)...)
 	return result, nil
 }
 
@@ -893,13 +897,11 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	estimatedPromptTokens := estimateOpenAIInputTokens(payload.Messages, payload.Tools, payload.ToolChoice)
-	if h.logger != nil {
-		h.logger.InfoModule("OPENAI", "AI请求入口 model=%s stream=%t messages=%d", payload.Model, payload.Stream, len(payload.Messages))
+	if _, ok := splitLingmaModel(payload.Model); ok {
+		h.handleLingmaChatCompletion(w, r, payload, estimatedPromptTokens)
+		return
 	}
 	if shouldReplyHi(payload) {
-		if h.logger != nil {
-			h.logger.InfoModule("OPENAI", "AI调用跳过 %s reason=local_hi model=%s", accountLogPrefix("local"), payload.Model)
-		}
 		h.writeHiResponse(w, payload.Model, payload.Stream, estimatedPromptTokens)
 		return
 	}
@@ -925,10 +927,10 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	defer executed.Stream.Close()
 
 	if payload.Stream {
-		h.handleStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), executed.AccountEmail, executed.ToolNames, estimatedPromptTokens)
+		h.handleStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), executed.ToolNames, executed.ToolSchemas, estimatedPromptTokens)
 		return
 	}
-	h.handleNonStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), executed.AccountEmail, executed.ToolNames, estimatedPromptTokens)
+	h.handleNonStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), executed.ToolNames, executed.ToolSchemas, estimatedPromptTokens)
 }
 
 func shouldReplyHi(payload chatRequest) bool {
@@ -1015,8 +1017,7 @@ func (h *Handler) writeHiResponse(w http.ResponseWriter, model string, stream bo
 	}
 }
 
-func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, accountEmail string, toolNames []string, estimatedPromptTokens int) {
-	start := time.Now()
+func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, toolNames []string, toolSchemas []toolcall.ToolSchema, estimatedPromptTokens int) {
 	setSSEHeaders(w)
 	flusher, _ := w.(http.Flusher)
 	scanner := bufio.NewScanner(body)
@@ -1091,7 +1092,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 			h.logger.DebugModule("OPENAI", "stream tool sieve model=%s input=%q raw_visible=%q tool_calls=%s", model, content, chunkResult.Content, debugJSON(chunkResult.ToolCalls))
 			if len(chunkResult.ToolCalls) > 0 {
 				toolCallsSent = true
-				h.logger.DebugModule("OPENAI", "stream emit tool calls model=%s tool_calls=%s", model, debugJSON(toolcall.FormatOpenAIToolCalls(chunkResult.ToolCalls)))
+				h.logger.DebugModule("OPENAI", "stream emit tool calls model=%s tool_calls=%s", model, debugJSON(toolcall.FormatOpenAIToolCallsWithSchemas(chunkResult.ToolCalls, toolSchemas)))
 				writeSSE(w, map[string]any{
 					"id":      messageID,
 					"object":  "chat.completion.chunk",
@@ -1100,7 +1101,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 					"choices": []map[string]any{{
 						"index": 0,
 						"delta": map[string]any{
-							"tool_calls": toolcall.FormatOpenAIToolCalls(chunkResult.ToolCalls),
+							"tool_calls": toolcall.FormatOpenAIToolCallsWithSchemas(chunkResult.ToolCalls, toolSchemas),
 						},
 						"finish_reason": nil,
 					}},
@@ -1155,7 +1156,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 		}
 		if len(finalResult.ToolCalls) > 0 {
 			toolCallsSent = true
-			h.logger.DebugModule("OPENAI", "stream emit final tool calls model=%s tool_calls=%s", model, debugJSON(toolcall.FormatOpenAIToolCalls(finalResult.ToolCalls)))
+			h.logger.DebugModule("OPENAI", "stream emit final tool calls model=%s tool_calls=%s", model, debugJSON(toolcall.FormatOpenAIToolCallsWithSchemas(finalResult.ToolCalls, toolSchemas)))
 			writeSSE(w, map[string]any{
 				"id":      messageID,
 				"object":  "chat.completion.chunk",
@@ -1164,7 +1165,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 				"choices": []map[string]any{{
 					"index": 0,
 					"delta": map[string]any{
-						"tool_calls": toolcall.FormatOpenAIToolCalls(finalResult.ToolCalls),
+						"tool_calls": toolcall.FormatOpenAIToolCallsWithSchemas(finalResult.ToolCalls, toolSchemas),
 					},
 					"finish_reason": nil,
 				}},
@@ -1211,16 +1212,6 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 	})
 	_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	h.metrics.RecordModelUsage(statsModel, promptTokens, completionTokens, totalTokens)
-	h.logger.InfoModule("OPENAI", "AI调用完成 %s mode=stream model=%s finish_reason=%s duration=%s usage=%s", accountLogPrefix(accountEmail), model, func() string {
-		if toolCallsSent {
-			return "tool_calls"
-		}
-		return "stop"
-	}(), time.Since(start), debugJSON(map[string]any{
-		"prompt_tokens":     promptTokens,
-		"completion_tokens": completionTokens,
-		"total_tokens":      totalTokens,
-	}))
 	h.logger.DebugModule("OPENAI", "stream completed model=%s final_content=%q finish_reason=%s usage=%s", model, contentBuilder.String(), func() string {
 		if toolCallsSent {
 			return "tool_calls"
@@ -1233,11 +1224,9 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 	}))
 }
 
-func (h *Handler) handleNonStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, accountEmail string, toolNames []string, estimatedPromptTokens int) {
-	start := time.Now()
+func (h *Handler) handleNonStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, toolNames []string, toolSchemas []toolcall.ToolSchema, estimatedPromptTokens int) {
 	result, upstreamErr, err := h.readCompletedChat(body, model, toolNames)
 	if err != nil {
-		h.logger.WarnModule("OPENAI", "AI调用完成失败 %s mode=non_stream model=%s duration=%s err=%v", accountLogPrefix(accountEmail), model, time.Since(start), err)
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "读取上游响应失败"})
 		return
 	}
@@ -1246,7 +1235,6 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, body io.Reader, model s
 		if status <= 0 {
 			status = http.StatusBadGateway
 		}
-		h.logger.WarnModule("OPENAI", "AI调用完成失败 %s mode=non_stream model=%s status=%d duration=%s err=%v", accountLogPrefix(accountEmail), model, status, time.Since(start), upstreamErr)
 		writeJSON(w, status, map[string]any{"error": upstreamErr.Error()})
 		return
 	}
@@ -1262,7 +1250,7 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, body io.Reader, model s
 		if result.Content == "" {
 			message["content"] = nil
 		}
-		message["tool_calls"] = toolcall.FormatOpenAIToolCalls(result.ToolCalls)
+		message["tool_calls"] = toolcall.FormatOpenAIToolCallsWithSchemas(result.ToolCalls, toolSchemas)
 	}
 	result.PromptTokens, result.CompletionTokens, result.TotalTokens = applyUsageFallback(
 		result.PromptTokens,
@@ -1277,11 +1265,6 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, body io.Reader, model s
 		"total_tokens":      result.TotalTokens,
 	}))
 	h.metrics.RecordModelUsage(statsModel, result.PromptTokens, result.CompletionTokens, result.TotalTokens)
-	h.logger.InfoModule("OPENAI", "AI调用完成 %s mode=non_stream model=%s finish_reason=%s duration=%s usage=%s", accountLogPrefix(accountEmail), model, result.FinishReason, time.Since(start), debugJSON(map[string]any{
-		"prompt_tokens":     result.PromptTokens,
-		"completion_tokens": result.CompletionTokens,
-		"total_tokens":      result.TotalTokens,
-	}))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
 		"object":  "chat.completion",
@@ -1751,23 +1734,12 @@ func (h *Handler) generateAsset(ctx context.Context, requestedModel, chatType, s
 	return h.generateAssetWithSession(ctx, requestedModel, chatType, size, messages, true)
 }
 
-func (h *Handler) generateAssetWithSession(ctx context.Context, requestedModel, chatType, size string, messages []map[string]any, allowGuestRefresh bool) (contentURL string, err error) {
+func (h *Handler) generateAssetWithSession(ctx context.Context, requestedModel, chatType, size string, messages []map[string]any, allowGuestRefresh bool) (string, error) {
 	model, _ := h.ResolveModel(ctx, requestedModel, chatType)
 	session, err := h.accounts.GetAccountSession()
 	if err != nil {
 		return "", err
 	}
-	start := time.Now()
-	accountLabel := accountLogPrefix(session.Email)
-	h.logger.InfoModule("OPENAI", "AI资源调用开始 %s model=%s requested_model=%s chat_type=%s size=%s", accountLabel, model, requestedModel, chatType, size)
-	defer func() {
-		if err != nil {
-			h.logger.WarnModule("OPENAI", "AI资源调用失败 %s model=%s chat_type=%s duration=%s err=%v", accountLabel, model, chatType, time.Since(start), err)
-			return
-		}
-		h.logger.InfoModule("OPENAI", "AI资源调用完成 %s model=%s chat_type=%s duration=%s", accountLabel, model, chatType, time.Since(start))
-	}()
-
 	normalizedMessages := normalizeMessages(messages, chatType, thinkingModeFast)
 	normalizedMessages, err = h.uploadInlineMedia(ctx, session.Token, normalizedMessages)
 	if err != nil {

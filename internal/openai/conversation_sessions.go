@@ -9,6 +9,7 @@ import (
 
 	"qwen2api/internal/logging"
 	"qwen2api/internal/storage"
+	"qwen2api/internal/toolcall"
 )
 
 const conversationSessionTTL = 24 * time.Hour
@@ -28,6 +29,7 @@ type preparedChatRequest struct {
 	LastUpstreamMessages []map[string]any
 	ContextHash          string
 	ToolNames            []string
+	ToolSchemas          []toolcall.ToolSchema
 }
 
 func NewConversationSessionService(store storage.ConversationStore, logger *logging.Logger) *ConversationSessionService {

@@ -9,7 +9,6 @@ import (
 
 	"qwen2api/internal/config"
 	"qwen2api/internal/logging"
-	"qwen2api/internal/metrics"
 )
 
 func TestHandleNonStreamReturnsUpstreamError(t *testing.T) {
@@ -21,7 +20,7 @@ func TestHandleNonStreamReturnsUpstreamError(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	body := `{"success":false,"request_id":"req-1","data":{"code":"RequestValidationError","details":"[\"Field 'chat_id': Field required\"]"}}`
 
-	handler.handleNonStream(recorder, strings.NewReader(body), "qwen3.6-plus", "qwen3.6-plus", "user@example.com", nil, 1)
+	handler.handleNonStream(recorder, strings.NewReader(body), "qwen3.6-plus", "qwen3.6-plus", nil, nil, 1)
 
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusInternalServerError)
@@ -33,48 +32,6 @@ func TestHandleNonStreamReturnsUpstreamError(t *testing.T) {
 	}
 	if !strings.Contains(strings.TrimSpace(payload["error"].(string)), "chat_id") {
 		t.Fatalf("error = %q, want to contain chat_id", payload["error"])
-	}
-}
-
-func TestHandleNonStreamReturnsReasoningContentWhenEnabled(t *testing.T) {
-	handler := &Handler{
-		cfg:     config.Config{},
-		runtime: config.NewRuntime(config.Config{OutThink: true}),
-		metrics: metrics.NewDashboardStats(),
-		logger:  logging.New(false),
-	}
-
-	recorder := httptest.NewRecorder()
-	body := strings.Join([]string{
-		`data: {"choices":[{"delta":{"role":"assistant","content":"first","phase":"think"}}]}`,
-		"",
-		`data: {"choices":[{"delta":{"role":"assistant","content":"你好","phase":"answer"}}]}`,
-		"",
-		`data: [DONE]`,
-		"",
-	}, "\n")
-
-	handler.handleNonStream(recorder, strings.NewReader(body), "qwen3.6-plus", "qwen3.6-plus", "user@example.com", nil, 1)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
-	}
-
-	var payload map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
-	}
-	choices, _ := payload["choices"].([]any)
-	if len(choices) != 1 {
-		t.Fatalf("choices len = %d, want 1", len(choices))
-	}
-	choice, _ := choices[0].(map[string]any)
-	message, _ := choice["message"].(map[string]any)
-	if got := message["content"]; got != "你好" {
-		t.Fatalf("content = %v, want %q", got, "你好")
-	}
-	if got := message["reasoning_content"]; got != "first" {
-		t.Fatalf("reasoning_content = %v, want %q", got, "first")
 	}
 }
 

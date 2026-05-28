@@ -70,9 +70,12 @@ func TestParseChatCompletionContentSupportsNestedJSONContent(t *testing.T) {
 		}
 	}`)
 
-	content, _, _, _, _ := parseChatCompletionContent(raw, false)
+	content, reasoning, _, _, _ := parseChatCompletionContent(raw, false)
 	if content != "hello from nested payload" {
 		t.Fatalf("content = %q, want %q", content, "hello from nested payload")
+	}
+	if reasoning != "" {
+		t.Fatalf("reasoning = %q, want empty", reasoning)
 	}
 }
 
@@ -81,12 +84,12 @@ func TestParseChatCompletionContentSupportsThinkingSummaryPhase(t *testing.T) {
 		"data: {\"choices\":[{\"delta\":{\"phase\":\"answer\",\"content\":\"你好\"}}]}\n\n")
 
 	content, reasoning, _, _, _ := parseChatCompletionContent(raw, true)
+	wantReasoning := "回应用户的问候并主动提供帮助\n我感知到用户重复发送了简单的问候。\n我希望能为用户提供更有价值的协助。"
 	if content != "你好" {
 		t.Fatalf("content = %q, want %q", content, "你好")
 	}
-	want := "回应用户的问候并主动提供帮助\n我感知到用户重复发送了简单的问候。\n我希望能为用户提供更有价值的协助。"
-	if reasoning != want {
-		t.Fatalf("reasoning = %q, want %q", reasoning, want)
+	if reasoning != wantReasoning {
+		t.Fatalf("reasoning = %q, want %q", reasoning, wantReasoning)
 	}
 }
 

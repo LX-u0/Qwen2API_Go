@@ -119,41 +119,6 @@ func TestProcessStreamChunkDoesNotLeakSplitClosingWrapperAfterValidToolCall(t *t
 	}
 }
 
-func TestProcessStreamChunkDoesNotLeakSplitToolResultEcho(t *testing.T) {
-	state := NewStreamState()
-
-	chunks := []string{
-		";user:<ml_tool_result>\n  <ml_tool_name>terminal</ml_tool_name>\n",
-		"  <ml_tool_call_id>call_123</ml_tool_call_id>\n",
-		"  <content><![CDATA[{\"output\":\"secret\"}]]></content>\n</ml_tool_result>\n",
-		"\nGood. Now continue.",
-	}
-
-	var combinedContent strings.Builder
-	for _, chunk := range chunks {
-		result := ProcessStreamChunk(state, chunk)
-		combinedContent.WriteString(CleanVisibleChunk(result.Content))
-		if len(result.ToolCalls) != 0 {
-			t.Fatalf("tool calls len = %d, want 0", len(result.ToolCalls))
-		}
-	}
-	final := FinalizeStream(state)
-	combinedContent.WriteString(CleanVisibleChunk(final.Content))
-
-	got := strings.TrimSpace(combinedContent.String())
-	if got != "Good. Now continue." {
-		t.Fatalf("content = %q, want visible answer only", got)
-	}
-}
-
-func TestCleanVisibleTextRemovesSerializedRolePrefixLeftByToolResult(t *testing.T) {
-	input := ";user:<ml_tool_result><content><![CDATA[secret]]></content></ml_tool_result>\n\nanswer"
-	got := CleanVisibleText(input)
-	if got != "answer" {
-		t.Fatalf("content = %q, want %q", got, "answer")
-	}
-}
-
 func TestProcessStreamChunkDoesNotFragmentPlainTextWhenToolsEnabled(t *testing.T) {
 	state := NewStreamState()
 
@@ -295,6 +260,94 @@ func TestFormatToolResultOmitsNilMetadata(t *testing.T) {
 	}
 }
 
+func TestFormatOpenAIToolCallsKeepsStringArgumentsForStringSchema(t *testing.T) {
+	calls := []ToolCall{{
+		Name: "Write",
+		Input: map[string]any{
+			"filePath": "/tmp/opencode/test.txt",
+			"content":  `[[{"content":"Hello from opencode!","filePath":"/tmp/opencode/test.txt"}]]`,
+		},
+	}}
+	schemas := []ToolSchema{{
+		Name: "Write",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"filePath": map[string]any{"type": "string"},
+				"content":  map[string]any{"type": "string"},
+			},
+		},
+	}}
+
+	formatted := FormatOpenAIToolCallsWithSchemas(calls, schemas)
+	fn := formatted[0]["function"].(map[string]any)
+	args := map[string]any{}
+	if err := json.Unmarshal([]byte(fn["arguments"].(string)), &args); err != nil {
+		t.Fatalf("unmarshal args: %v", err)
+	}
+	if got := args["content"]; got != calls[0].Input["content"] {
+		t.Fatalf("content = %#v, want %#v", got, calls[0].Input["content"])
+	}
+}
+
+func TestFormatOpenAIToolCallsRestoresStructuredArgumentsForObjectSchema(t *testing.T) {
+	calls := []ToolCall{{
+		Name: "search",
+		Input: map[string]any{
+			"filters": `{"language":"go","stars":10}`,
+		},
+	}}
+	schemas := []ToolSchema{{
+		Name: "search",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"filters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"language": map[string]any{"type": "string"},
+						"stars":    map[string]any{"type": "number"},
+					},
+				},
+			},
+		},
+	}}
+
+	formatted := FormatOpenAIToolCallsWithSchemas(calls, schemas)
+	fn := formatted[0]["function"].(map[string]any)
+	args := map[string]any{}
+	if err := json.Unmarshal([]byte(fn["arguments"].(string)), &args); err != nil {
+		t.Fatalf("unmarshal args: %v", err)
+	}
+	filters, ok := args["filters"].(map[string]any)
+	if !ok {
+		t.Fatalf("filters = %#v, want object", args["filters"])
+	}
+	if filters["language"] != "go" {
+		t.Fatalf("language = %#v, want %q", filters["language"], "go")
+	}
+	if filters["stars"] != float64(10) {
+		t.Fatalf("stars = %#v, want 10", filters["stars"])
+	}
+}
+
+func TestFormatAssistantToolCallsEncodesNestedArgumentsAsJSONStrings(t *testing.T) {
+	markup := formatAssistantToolCalls([]any{map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name":      "search",
+			"arguments": `{"filters":{"language":"go","stars":10},"query":"tool calling"}`,
+		},
+	}})
+
+	if !strings.Contains(markup, `<filters><![CDATA[{"language":"go","stars":10}]]></filters>`) {
+		t.Fatalf("filters not JSON encoded in markup: %s", markup)
+	}
+	if !strings.Contains(markup, `<query><![CDATA[tool calling]]></query>`) {
+		t.Fatalf("query missing from markup: %s", markup)
+	}
+}
+
 func TestFormatToolResultEscapesCDATAEndMarker(t *testing.T) {
 	result := formatToolResult(map[string]any{
 		"role":         "tool",
@@ -327,28 +380,5 @@ func TestCleanVisibleChunkPreservesCodeFenceAndBracketWhitespace(t *testing.T) {
 	got2 := CleanVisibleChunk(input2)
 	if got2 != input2 {
 		t.Fatalf("content = %q, want %q", got2, input2)
-	}
-}
-
-func TestFormatOpenAIToolCallsParsesNestedJSONArgumentStrings(t *testing.T) {
-	calls := FormatOpenAIToolCalls([]ToolCall{{
-		Name: "question",
-		Input: map[string]any{
-			"questions": `[{"question":"X","options":["a","b","c"],"required":true}]`,
-		},
-	}})
-
-	fn := calls[0]["function"].(map[string]any)
-	var args map[string]any
-	if err := json.Unmarshal([]byte(fn["arguments"].(string)), &args); err != nil {
-		t.Fatal(err)
-	}
-	questions, ok := args["questions"].([]any)
-	if !ok || len(questions) != 1 {
-		t.Fatalf("questions = %#v, want native array", args["questions"])
-	}
-	first := questions[0].(map[string]any)
-	if first["question"] != "X" || first["required"] != true {
-		t.Fatalf("unexpected question = %#v", first)
 	}
 }

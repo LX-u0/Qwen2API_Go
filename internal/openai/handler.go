@@ -75,8 +75,7 @@ type chatReasoning struct {
 	Effort any `json:"effort"`
 }
 
-// ---------- 新增工具函数 ----------
-// extractToolNames 安全提取工具名称列表
+// ---------- 新增：安全提取工具名称 ----------
 func extractToolNames(tools any) []string {
 	if tools == nil {
 		return nil
@@ -99,7 +98,7 @@ func extractToolNames(tools any) []string {
 	return names
 }
 
-// ---------- 以下所有函数均源自你提供的旧版，未作改动 ----------
+// ---------- 以下全部为旧版原有函数，未做任何改动 ----------
 
 func mergeSystemMessages(messages []map[string]any) []map[string]any {
 	systemTexts := make([]string, 0)
@@ -1282,19 +1281,19 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 	})
 	_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	h.metrics.RecordModelUsage(statsModel, promptTokens, completionTokens, totalTokens)
-	h.logger.DebugModule("OPENAI", "stream completed model=%s final_content=%q finish_reason=%s usage=%s", model, contentBuilder.String(), func() string {
+	h.logger.DebugModule("OPENAI", "stream completed model=%s final_content=%q finish_reason=%s duration=%s usage=%s", model, contentBuilder.String(), func() string {
 		if toolCallsSent {
 			return "tool_calls"
 		}
 		return "stop"
-	}(), debugJSON(map[string]any{
+	}(), time.Since(start), debugJSON(map[string]any{
 		"prompt_tokens":     promptTokens,
 		"completion_tokens": completionTokens,
 		"total_tokens":      totalTokens,
 	}))
 }
 
-// ---------- 以下函数均保持旧版不变 ----------
+// ---------- 以下函数保持旧版不变 ----------
 
 func (h *Handler) handleNonStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, toolNames []string, toolSchemas []toolcall.ToolSchema, estimatedPromptTokens int) {
 	result, upstreamErr, err := h.readCompletedChat(body, model, toolNames)

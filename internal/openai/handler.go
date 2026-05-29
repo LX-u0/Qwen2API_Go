@@ -52,7 +52,31 @@ func NewHandler(cfg config.Config, runtime *config.Runtime, qwenClient *qwen.Cli
 	}
 }
 
-// 安全提取工具名称列表
+type upstreamMessage struct {
+	Role          string `json:"role"`
+	Content       any    `json:"content"`
+	ChatType      string `json:"chat_type"`
+	Extra         any    `json:"extra"`
+	FeatureConfig any    `json:"feature_config"`
+}
+
+type thinkingMode string
+
+const (
+	thinkingModeFast     thinkingMode = "Fast"
+	thinkingModeThinking thinkingMode = "Thinking"
+)
+
+func (m thinkingMode) enabled() bool {
+	return m == thinkingModeThinking
+}
+
+type chatReasoning struct {
+	Effort any `json:"effort"`
+}
+
+// ---------- 新增工具函数 ----------
+// extractToolNames 安全提取工具名称列表
 func extractToolNames(tools any) []string {
 	if tools == nil {
 		return nil
@@ -75,19 +99,820 @@ func extractToolNames(tools any) []string {
 	return names
 }
 
-// ... 以下保留你旧版中所有原有的函数（mergeSystemMessages、extractText 等等），不一一重复
-// 关键改动集中在 HandleChatCompletion、handleStream 两个函数，其他保持原样
+// ---------- 以下所有函数均源自你提供的旧版，未作改动 ----------
 
-// 旧版中已有的全部函数，这里为了节约篇幅省略，但你要确保它们存在于文件中
-// 下面开始是完整文件，包含了旧版所有代码 + 新增的 extractToolNames + 修改后的 HandleChatCompletion 和 handleStream
+func mergeSystemMessages(messages []map[string]any) []map[string]any {
+	systemTexts := make([]string, 0)
+	result := make([]map[string]any, 0, len(messages))
+	for _, message := range messages {
+		if fmt.Sprint(message["role"]) == "system" {
+			if text := extractText(message["content"]); strings.TrimSpace(text) != "" {
+				systemTexts = append(systemTexts, text)
+			}
+			continue
+		}
+		result = append(result, message)
+	}
+	if len(systemTexts) > 0 {
+		result = append([]map[string]any{{
+			"role":    "system",
+			"content": strings.Join(systemTexts, "\n\n"),
+		}}, result...)
+	}
+	return result
+}
 
-// ---------------- 旧版全部代码开始 ----------------
-// （这里应该是你之前提供的那个可编译的 handler.go 全部内容，但为了最终文件完整，我把整个文件写出）
-// 由于内容过长，我只写出修改后的关键部分，其他函数请直接从你的旧版文件复制
+func extractText(content any) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []any:
+		parts := make([]string, 0)
+		for _, item := range v {
+			if obj, ok := item.(map[string]any); ok && fmt.Sprint(obj["type"]) == "text" {
+				parts = append(parts, fmt.Sprint(obj["text"]))
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return ""
+	}
+}
 
-// 我假设你已经有完整的旧版文件，下面我仅提供修改后的函数片段，你可以按需替换。
+func chatTypeForModel(model string) string {
+	switch {
+	case strings.Contains(model, "-search"):
+		return "search"
+	case strings.Contains(model, "-image-edit"):
+		return "image_edit"
+	case strings.Contains(model, "-image"):
+		return "t2i"
+	case strings.Contains(model, "-video"):
+		return "t2v"
+	default:
+		return "t2t"
+	}
+}
 
-// 修改1：HandleChatCompletion
+func parseEnableThinking(raw any) (bool, bool) {
+	switch v := raw.(type) {
+	case bool:
+		return v, true
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(v))
+		switch normalized {
+		case "true":
+			return true, true
+		case "false":
+			return false, true
+		}
+	}
+	return false, false
+}
+
+func parseReasoningEffort(raw any) (thinkingMode, bool) {
+	effort, ok := raw.(string)
+	if !ok {
+		return "", false
+	}
+
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "none", "minimal", "low":
+		return thinkingModeFast, true
+	case "medium", "high", "xhigh":
+		return thinkingModeThinking, true
+	default:
+		return "", false
+	}
+}
+
+func resolveThinkingMode(model string, reasoningEffort any, nestedReasoningEffort any, enableThinking any) thinkingMode {
+	if strings.Contains(model, "-thinking") {
+		return thinkingModeThinking
+	}
+	if strings.Contains(model, "-fast") {
+		return thinkingModeFast
+	}
+	if mode, ok := parseReasoningEffort(reasoningEffort); ok {
+		return mode
+	}
+	if mode, ok := parseReasoningEffort(nestedReasoningEffort); ok {
+		return mode
+	}
+	if enabled, ok := parseEnableThinking(enableThinking); ok {
+		if enabled {
+			return thinkingModeThinking
+		}
+		return thinkingModeFast
+	}
+	return thinkingModeFast
+}
+
+func isThinkingEnabled(model string, raw any) bool {
+	return resolveThinkingMode(model, nil, nil, raw).enabled()
+}
+
+func splitModelSuffix(model string) string {
+	suffixes := []string{
+		"-thinking-search",
+		"-fast-search",
+		"-image-edit",
+		"-thinking",
+		"-fast",
+		"-search",
+		"-video",
+		"-image",
+	}
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(model, suffix) {
+			return strings.TrimSuffix(model, suffix)
+		}
+	}
+	return model
+}
+
+func modelSupports(meta map[string]any, feature string) bool {
+	info, ok := meta["meta"].(map[string]any)
+	if !ok {
+		return false
+	}
+
+	if feature == "thinking" {
+		abilities, ok := info["abilities"].(map[string]any)
+		if !ok {
+			return false
+		}
+		if enabled, ok := abilities["thinking"].(bool); ok {
+			return enabled
+		}
+		return false
+	}
+
+	chatTypes, ok := info["chat_type"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range chatTypes {
+		if fmt.Sprint(item) == feature {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) ResolveModel(ctx context.Context, requested string, chatType string) (string, error) {
+	base := splitModelSuffix(strings.TrimSpace(requested))
+	if base == "" {
+		base = "qwen3-235b-a22b"
+	}
+
+	session, err := h.accounts.GetAccountSession()
+	if err != nil {
+		return base, nil
+	}
+
+	models, err := h.qwen.ListModels(ctx, session.Token)
+	if err != nil {
+		return base, nil
+	}
+
+	normalized := strings.ToLower(base)
+	for _, model := range models {
+		aliases := []string{
+			strings.ToLower(model.ID),
+			strings.ToLower(model.Name),
+		}
+		for _, alias := range aliases {
+			if alias == normalized && strings.TrimSpace(model.ID) != "" {
+				return model.ID, nil
+			}
+		}
+	}
+
+	if chatType == "t2i" || chatType == "t2v" || chatType == "image_edit" {
+		for _, model := range models {
+			if modelSupports(model.Info, chatType) {
+				return model.ID, nil
+			}
+		}
+	}
+
+	return base, nil
+}
+
+func buildFeatureConfig(mode thinkingMode) map[string]any {
+	config := map[string]any{
+		"thinking_enabled": mode.enabled(),
+		"output_schema":    "phase",
+		"research_mode":    "normal",
+		"auto_thinking":    false,
+		"auto_search":      true,
+	}
+	config["thinking_mode"] = string(mode)
+	if mode.enabled() {
+		config["thinking_format"] = "summary"
+	}
+	return config
+}
+
+func isThinkingPhase(phase string) bool {
+	switch strings.TrimSpace(phase) {
+	case "think", "thinking_summary":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *Handler) shouldExposeThinking() bool {
+	if h == nil || h.runtime == nil {
+		return false
+	}
+	return h.runtime.Snapshot().OutThink
+}
+
+func extractThinkingSummary(extra map[string]any) string {
+	if extra == nil {
+		return ""
+	}
+	joinContent := func(value any) string {
+		block, _ := value.(map[string]any)
+		if block == nil {
+			return ""
+		}
+		content, _ := block["content"].([]any)
+		if len(content) == 0 {
+			return ""
+		}
+		parts := make([]string, 0, len(content))
+		for _, item := range content {
+			text := strings.TrimSpace(fmt.Sprint(item))
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+
+	title := joinContent(extra["summary_title"])
+	thought := joinContent(extra["summary_thought"])
+	switch {
+	case title != "" && thought != "":
+		return title + "\n" + thought
+	case thought != "":
+		return thought
+	default:
+		return title
+	}
+}
+
+func extractDeltaContent(delta map[string]any) string {
+	if delta == nil {
+		return ""
+	}
+	content := fmt.Sprint(delta["content"])
+	if strings.TrimSpace(content) != "" {
+		return content
+	}
+	extra, _ := delta["extra"].(map[string]any)
+	return extractThinkingSummary(extra)
+}
+
+func normalizeMessages(messages []map[string]any, chatType string, mode thinkingMode) []map[string]any {
+	messages = mergeSystemMessages(messages)
+	if len(messages) == 0 {
+		return []map[string]any{{
+			"role":    "user",
+			"content": "user:",
+		}}
+	}
+
+	systemText := ""
+	conversation := make([]map[string]any, 0, len(messages))
+	for _, message := range messages {
+		if fmt.Sprint(message["role"]) == "system" {
+			systemText = extractText(message["content"])
+			continue
+		}
+		conversation = append(conversation, message)
+	}
+
+	if len(conversation) == 0 {
+		conversation = []map[string]any{{"role": "user", "content": "user:"}}
+	}
+
+	if len(conversation) == 1 {
+		normalized := convertContent(conversation[0]["content"])
+		text := extractText(normalized)
+		if systemText != "" {
+			text = "system:" + systemText + "\n\n" + text
+			switch vv := normalized.(type) {
+			case string:
+				normalized = strings.TrimSpace(text)
+			case []map[string]any:
+				normalized = append([]map[string]any{{"type": "text", "text": strings.TrimSpace(text)}}, vv...)
+			}
+		}
+		return []map[string]any{{
+			"role":           "user",
+			"content":        normalized,
+			"chat_type":      chatType,
+			"extra":          map[string]any{},
+			"feature_config": buildFeatureConfig(mode),
+		}}
+	}
+
+	history := make([]string, 0, len(conversation)-1)
+	for _, message := range conversation[:len(conversation)-1] {
+		history = append(history, fmt.Sprintf("%s:%s", fmt.Sprint(message["role"]), extractText(message["content"])))
+	}
+	last := conversation[len(conversation)-1]
+	lastContent := convertContent(last["content"])
+	currentText := extractText(lastContent)
+	if systemText != "" {
+		history = append([]string{"system:" + systemText}, history...)
+	}
+	combined := strings.Join(history, ";")
+	if combined != "" {
+		combined += ";"
+	}
+	combined += fmt.Sprintf("%s:%s", fmt.Sprint(last["role"]), currentText)
+
+	switch vv := lastContent.(type) {
+	case string:
+		lastContent = combined
+	case []map[string]any:
+		lastContent = append([]map[string]any{{"type": "text", "text": combined}}, vv...)
+	}
+
+	return []map[string]any{{
+		"role":           "user",
+		"content":        lastContent,
+		"chat_type":      chatType,
+		"extra":          map[string]any{},
+		"feature_config": buildFeatureConfig(mode),
+	}}
+}
+
+func cloneMap(input map[string]any) map[string]any {
+	output := make(map[string]any, len(input))
+	for k, v := range input {
+		output[k] = v
+	}
+	return output
+}
+
+func cloneMessageList(messages []map[string]any) []map[string]any {
+	cloned := make([]map[string]any, 0, len(messages))
+	for _, message := range messages {
+		cloned = append(cloned, cloneMap(message))
+	}
+	return cloned
+}
+
+func buildChatRequestBody(session storage.Account, model, chatID, chatType string, messages []map[string]any) map[string]any {
+	if chatType == "t2v" {
+		return buildVideoRequestBody(session, model, chatID, chatType, messages)
+	}
+	if session.IsGuest() {
+		return buildGuestChatRequestBody(model, chatID, chatType, messages)
+	}
+	return map[string]any{
+		"stream":             true,
+		"incremental_output": true,
+		"chat_id":            chatID,
+		"chat_type":          chatType,
+		"model":              model,
+		"messages":           messages,
+		"session_id":         fmt.Sprintf("%d", time.Now().UnixNano()),
+		"id":                 fmt.Sprintf("%d", time.Now().UnixNano()),
+		"sub_chat_type":      chatType,
+		"chat_mode":          "normal",
+	}
+}
+
+func buildVideoRequestBody(session storage.Account, model, chatID, chatType string, messages []map[string]any) map[string]any {
+	chatMode := "normal"
+	if session.IsGuest() {
+		chatMode = "guest"
+	}
+	return map[string]any{
+		"stream":             false,
+		"version":            "2.1",
+		"incremental_output": true,
+		"chat_id":            chatID,
+		"chat_mode":          chatMode,
+		"model":              model,
+		"parent_id":          nil,
+		"messages":           decorateAssetMessages(model, chatType, messages),
+		"timestamp":          time.Now().Unix(),
+	}
+}
+
+func buildGuestChatRequestBody(model, chatID, chatType string, messages []map[string]any) map[string]any {
+	return map[string]any{
+		"stream":             true,
+		"version":            "2.1",
+		"incremental_output": true,
+		"chat_id":            chatID,
+		"chat_mode":          "guest",
+		"model":              model,
+		"parent_id":          nil,
+		"messages":           decorateGuestMessages(model, chatType, messages),
+		"timestamp":          time.Now().Unix(),
+	}
+}
+
+func decorateGuestMessages(model, chatType string, messages []map[string]any) []map[string]any {
+	decorated := make([]map[string]any, 0, len(messages))
+	messageTimestamp := time.Now().Unix()
+	for _, message := range messages {
+		item := cloneMap(message)
+		if _, ok := item["fid"]; !ok || strings.TrimSpace(fmt.Sprint(item["fid"])) == "" || fmt.Sprint(item["fid"]) == "<nil>" {
+			item["fid"] = fmt.Sprintf("%d", time.Now().UnixNano())
+		}
+		if _, ok := item["parentId"]; !ok {
+			item["parentId"] = nil
+		}
+		if _, ok := item["childrenIds"]; !ok {
+			item["childrenIds"] = []string{}
+		}
+		if _, ok := item["user_action"]; !ok || strings.TrimSpace(fmt.Sprint(item["user_action"])) == "" || fmt.Sprint(item["user_action"]) == "<nil>" {
+			item["user_action"] = "chat"
+		}
+		if _, ok := item["files"]; !ok {
+			item["files"] = []any{}
+		}
+		if _, ok := item["timestamp"]; !ok {
+			item["timestamp"] = messageTimestamp
+		}
+		if _, ok := item["models"]; !ok {
+			item["models"] = []string{model}
+		}
+		item["chat_type"] = chatType
+		item["sub_chat_type"] = chatType
+		if _, ok := item["parent_id"]; !ok {
+			item["parent_id"] = nil
+		}
+
+		featureConfig, _ := item["feature_config"].(map[string]any)
+		item["feature_config"] = normalizeGuestFeatureConfig(featureConfig)
+
+		extra, _ := item["extra"].(map[string]any)
+		if extra == nil {
+			extra = map[string]any{}
+		}
+		meta, _ := extra["meta"].(map[string]any)
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		meta["subChatType"] = chatType
+		extra["meta"] = meta
+		item["extra"] = extra
+
+		decorated = append(decorated, item)
+	}
+	return decorated
+}
+
+func decorateAssetMessages(model, chatType string, messages []map[string]any) []map[string]any {
+	decorated := make([]map[string]any, 0, len(messages))
+	messageTimestamp := time.Now().Unix()
+	for _, message := range messages {
+		item := cloneMap(message)
+		if _, ok := item["fid"]; !ok || strings.TrimSpace(fmt.Sprint(item["fid"])) == "" || fmt.Sprint(item["fid"]) == "<nil>" {
+			item["fid"] = fmt.Sprintf("%d", time.Now().UnixNano())
+		}
+		if _, ok := item["parentId"]; !ok {
+			item["parentId"] = nil
+		}
+		if _, ok := item["childrenIds"]; !ok {
+			item["childrenIds"] = []string{}
+		}
+		if _, ok := item["user_action"]; !ok || strings.TrimSpace(fmt.Sprint(item["user_action"])) == "" || fmt.Sprint(item["user_action"]) == "<nil>" {
+			item["user_action"] = "chat"
+		}
+		if _, ok := item["files"]; !ok {
+			item["files"] = []any{}
+		}
+		if _, ok := item["timestamp"]; !ok {
+			item["timestamp"] = messageTimestamp
+		}
+		if _, ok := item["models"]; !ok {
+			item["models"] = []string{model}
+		}
+		item["chat_type"] = chatType
+		item["sub_chat_type"] = chatType
+		if _, ok := item["parent_id"]; !ok {
+			item["parent_id"] = nil
+		}
+		decorated = append(decorated, item)
+	}
+	return decorated
+}
+
+func normalizeGuestFeatureConfig(featureConfig map[string]any) map[string]any {
+	if featureConfig == nil {
+		featureConfig = map[string]any{}
+	}
+	featureConfig["thinking_enabled"] = true
+	featureConfig["output_schema"] = "phase"
+	featureConfig["research_mode"] = "normal"
+	featureConfig["auto_thinking"] = true
+	featureConfig["thinking_mode"] = "Auto"
+	featureConfig["thinking_format"] = "summary"
+	featureConfig["auto_search"] = true
+	return featureConfig
+}
+
+func applyAssetSize(body map[string]any, chatType string, size string) {
+	size = strings.TrimSpace(size)
+	if body == nil || chatType != "t2v" || size == "" {
+		return
+	}
+	messages, _ := body["messages"].([]map[string]any)
+	for _, message := range messages {
+		message["size"] = size
+		extra, _ := message["extra"].(map[string]any)
+		if extra == nil {
+			extra = map[string]any{}
+		}
+		meta, _ := extra["meta"].(map[string]any)
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		meta["subChatType"] = chatType
+		meta["size"] = size
+		extra["meta"] = meta
+		message["extra"] = extra
+	}
+}
+
+func detectMediaURL(item map[string]any) (field string, url string) {
+	itemType := fmt.Sprint(item["type"])
+	switch itemType {
+	case "image":
+		return "image", strings.TrimSpace(fmt.Sprint(item["image"]))
+	case "video":
+		return "video", strings.TrimSpace(fmt.Sprint(item["video"]))
+	case "image_url":
+		if imageURL, ok := item["image_url"].(map[string]any); ok {
+			return "image_url", strings.TrimSpace(fmt.Sprint(imageURL["url"]))
+		}
+	case "video_url", "input_video":
+		if videoURL, ok := item["video_url"].(map[string]any); ok {
+			return "video_url", strings.TrimSpace(fmt.Sprint(videoURL["url"]))
+		}
+	}
+	return "", ""
+}
+
+func applyMediaURL(item map[string]any, field string, url string) {
+	switch field {
+	case "image":
+		item["image"] = url
+	case "video":
+		item["video"] = url
+	case "image_url":
+		imageURL, _ := item["image_url"].(map[string]any)
+		if imageURL == nil {
+			imageURL = map[string]any{}
+		}
+		imageURL["url"] = url
+		item["image_url"] = imageURL
+	case "video_url":
+		videoURL, _ := item["video_url"].(map[string]any)
+		if videoURL == nil {
+			videoURL = map[string]any{}
+		}
+		videoURL["url"] = url
+		item["video_url"] = videoURL
+	}
+}
+
+func (h *Handler) uploadInlineMedia(ctx context.Context, token string, messages []map[string]any) ([]map[string]any, error) {
+	cloned := cloneMessageList(messages)
+	for _, message := range cloned {
+		switch content := message["content"].(type) {
+		case []map[string]any:
+			for i := range content {
+				field, url := detectMediaURL(content[i])
+				if field == "" || !dataURIExpr.MatchString(url) {
+					continue
+				}
+				uploaded, err := h.uploadDataURI(ctx, token, url, field)
+				if err != nil {
+					return nil, err
+				}
+				applyMediaURL(content[i], field, uploaded)
+			}
+			message["content"] = content
+		case []any:
+			normalized := make([]map[string]any, 0, len(content))
+			for _, raw := range content {
+				item, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				item = cloneMap(item)
+				field, url := detectMediaURL(item)
+				if field != "" && dataURIExpr.MatchString(url) {
+					uploaded, err := h.uploadDataURI(ctx, token, url, field)
+					if err != nil {
+						return nil, err
+					}
+					applyMediaURL(item, field, uploaded)
+				}
+				normalized = append(normalized, item)
+			}
+			message["content"] = normalized
+		}
+	}
+	return cloned, nil
+}
+
+func (h *Handler) uploadDataURI(ctx context.Context, token string, raw string, field string) (string, error) {
+	matches := dataURIExpr.FindStringSubmatch(strings.TrimSpace(raw))
+	if len(matches) != 3 {
+		return "", errors.New("无效的 data URI")
+	}
+
+	contentType := strings.TrimSpace(matches[1])
+	content, err := base64.StdEncoding.DecodeString(matches[2])
+	if err != nil {
+		return "", err
+	}
+
+	exts, _ := mime.ExtensionsByType(contentType)
+	ext := ".bin"
+	if len(exts) > 0 {
+		ext = exts[0]
+	}
+	if ext == "" {
+		ext = ".bin"
+	}
+	prefix := "image"
+	if strings.Contains(field, "video") {
+		prefix = "video"
+	}
+	filename := prefix + "_" + fmt.Sprintf("%d", time.Now().UnixNano()) + filepath.Ext("placeholder"+ext)
+	if filepath.Ext(filename) == "" {
+		filename += ext
+	}
+
+	fileURL, _, err := h.qwen.UploadFile(ctx, token, filename, content, contentType)
+	if err != nil {
+		return "", err
+	}
+	return fileURL, nil
+}
+
+func convertContent(content any) any {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []any:
+		items := make([]map[string]any, 0)
+		for _, raw := range v {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			itemType := fmt.Sprint(item["type"])
+			switch itemType {
+			case "text":
+				items = append(items, map[string]any{"type": "text", "text": fmt.Sprint(item["text"])})
+			case "image_url":
+				if imageURL, ok := item["image_url"].(map[string]any); ok {
+					items = append(items, map[string]any{"type": "image", "image": fmt.Sprint(imageURL["url"])})
+				}
+			case "input_image", "image":
+				items = append(items, map[string]any{"type": "image", "image": fmt.Sprint(item["image"])})
+			case "video_url", "input_video", "video":
+				urlValue := fmt.Sprint(item["video"])
+				if urlValue == "" {
+					if videoURL, ok := item["video_url"].(map[string]any); ok {
+						urlValue = fmt.Sprint(videoURL["url"])
+					}
+				}
+				items = append(items, map[string]any{"type": "video", "video": urlValue})
+			}
+		}
+		if len(items) == 0 {
+			return ""
+		}
+		return items
+	default:
+		return ""
+	}
+}
+
+type chatRequest struct {
+	Model               string           `json:"model"`
+	Messages            []map[string]any `json:"messages"`
+	Stream              bool             `json:"stream"`
+	MaxTokens           int              `json:"max_tokens"`
+	MaxCompletionTokens int              `json:"max_completion_tokens"`
+	Temperature         *float64         `json:"temperature"`
+	TopP                *float64         `json:"top_p"`
+	Stop                any              `json:"stop"`
+	EnableThinking      any              `json:"enable_thinking"`
+	ReasoningEffort     any              `json:"reasoning_effort"`
+	Reasoning           *chatReasoning   `json:"reasoning"`
+	ThinkingBudget      any              `json:"thinking_budget"`
+	Tools               any              `json:"tools"`
+	ToolChoice          any              `json:"tool_choice"`
+	ParallelToolCalls   *bool            `json:"parallel_tool_calls"`
+	Size                string           `json:"size"`
+}
+
+func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
+	result, err := h.ListModelVariants(r.Context())
+	if err != nil {
+		status := http.StatusBadGateway
+		if upstreamErr, ok := err.(*qwen.UpstreamError); ok {
+			status = normalizeUpstreamStatus(upstreamErr.StatusCode)
+		}
+		writeJSON(w, status, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"object": "list",
+		"data":   result,
+	})
+}
+
+func (h *Handler) ListModelVariants(ctx context.Context) ([]map[string]any, error) {
+	return h.listModelVariants(ctx, false)
+}
+
+func (h *Handler) RefreshModelVariants(ctx context.Context) ([]map[string]any, error) {
+	return h.listModelVariants(ctx, true)
+}
+
+func (h *Handler) listModelVariants(ctx context.Context, force bool) ([]map[string]any, error) {
+	session, err := h.accounts.GetAccountSession()
+	if err != nil {
+		return nil, err
+	}
+
+	var models []qwen.Model
+	if force {
+		models, err = h.qwen.RefreshModels(ctx, session.Token)
+	} else {
+		models, err = h.qwen.ListModels(ctx, session.Token)
+	}
+	if err != nil {
+		h.accounts.RecordFailure(session.Email)
+		return nil, err
+	}
+	h.accounts.ResetFailure(session.Email)
+
+	simple := h.runtime.Snapshot().SimpleModelMap
+	result := make([]map[string]any, 0)
+	for _, model := range models {
+		result = append(result, buildModelVariant(model, ""))
+		result = append(result, buildModelVariant(model, "-fast"))
+		result = append(result, buildModelVariant(model, "-thinking"))
+		if simple {
+			continue
+		}
+		if modelSupports(model.Info, "search") {
+			result = append(result, buildModelVariant(model, "-search"))
+			result = append(result, buildModelVariant(model, "-fast-search"))
+			result = append(result, buildModelVariant(model, "-thinking-search"))
+		}
+		if modelSupports(model.Info, "t2i") {
+			result = append(result, buildModelVariant(model, "-image"))
+		}
+		if modelSupports(model.Info, "t2v") {
+			result = append(result, buildModelVariant(model, "-video"))
+		}
+		if modelSupports(model.Info, "image_edit") {
+			result = append(result, buildModelVariant(model, "-image-edit"))
+		}
+	}
+	return result, nil
+}
+
+func buildModelVariant(model qwen.Model, suffix string) map[string]any {
+	displayName := model.Name
+	if displayName == "" {
+		displayName = model.ID
+	}
+	variantDisplayName := displayName + suffix
+	return map[string]any{
+		"id":           variantDisplayName,
+		"object":       "model",
+		"created":      0,
+		"owned_by":     "qwen",
+		"name":         model.ID + suffix,
+		"upstream_id":  model.ID,
+		"display_name": variantDisplayName,
+	}
+}
+
+// ---------- 修改后的 HandleChatCompletion ----------
 func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	var payload chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -96,7 +921,7 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	}
 	estimatedPromptTokens := estimateOpenAIInputTokens(payload.Messages, payload.Tools, payload.ToolChoice)
 
-	// 安全提取工具列表
+	// 安全提取工具列表，防止 panic
 	toolList, _ := payload.Tools.([]any)
 	if shouldReplyHi(payload) && len(toolList) == 0 {
 		h.writeHiResponse(w, payload.Model, payload.Stream, estimatedPromptTokens)
@@ -124,7 +949,6 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	}
 	defer executed.Stream.Close()
 
-	// 使用提取的工具名，保留旧的 ToolSchemas 传递方式
 	toolNames := extractToolNames(payload.Tools)
 
 	if payload.Stream {
@@ -134,13 +958,97 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	h.handleNonStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), toolNames, executed.ToolSchemas, estimatedPromptTokens)
 }
 
-// 修改2：handleStream 加入心跳和 :connected
+func shouldReplyHi(payload chatRequest) bool {
+	for i := len(payload.Messages) - 1; i >= 0; i-- {
+		message := payload.Messages[i]
+		if fmt.Sprint(message["role"]) != "user" {
+			continue
+		}
+		return strings.EqualFold(strings.TrimSpace(extractText(message["content"])), "hi")
+	}
+	return false
+}
+
+func (h *Handler) writeHiResponse(w http.ResponseWriter, model string, stream bool, estimatedPromptTokens int) {
+	const content = "嘿，来啦！今天怎么样？"
+	estimatedCompletionTokens := estimateOpenAIOutputTokens(content, nil)
+	promptTokens, completionTokens, totalTokens := applyUsageFallback(0, 0, 0, estimatedPromptTokens, estimatedCompletionTokens)
+
+	messageID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
+	created := time.Now().Unix()
+	if stream {
+		setSSEHeaders(w)
+		writeSSE(w, map[string]any{
+			"id":      messageID,
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   model,
+			"choices": []map[string]any{{
+				"index":         0,
+				"delta":         map[string]any{"role": "assistant", "content": content},
+				"finish_reason": nil,
+			}},
+		})
+		writeSSE(w, map[string]any{
+			"id":      messageID,
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   model,
+			"choices": []map[string]any{{
+				"index":         0,
+				"delta":         map[string]any{},
+				"finish_reason": "stop",
+			}},
+		})
+		writeSSE(w, map[string]any{
+			"id":      messageID,
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"choices": []any{},
+			"usage": map[string]any{
+				"prompt_tokens":     promptTokens,
+				"completion_tokens": completionTokens,
+				"total_tokens":      totalTokens,
+			},
+		})
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		if h.metrics != nil {
+			h.metrics.RecordModelUsage(model, promptTokens, completionTokens, totalTokens)
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":      messageID,
+		"object":  "chat.completion",
+		"created": created,
+		"model":   model,
+		"choices": []map[string]any{{
+			"index": 0,
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": content,
+			},
+			"finish_reason": "stop",
+		}},
+		"usage": map[string]any{
+			"prompt_tokens":     promptTokens,
+			"completion_tokens": completionTokens,
+			"total_tokens":      totalTokens,
+		},
+	})
+	if h.metrics != nil {
+		h.metrics.RecordModelUsage(model, promptTokens, completionTokens, totalTokens)
+	}
+}
+
+// ---------- 修改后的 handleStream（加入心跳和 :connected）----------
 func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, toolNames []string, toolSchemas []toolcall.ToolSchema, estimatedPromptTokens int) {
 	start := time.Now()
 	setSSEHeaders(w)
 	flusher, _ := w.(http.Flusher)
 
-	// 立即发送连接信号，避免代理超时
+	// 立即发送连接信号，防止代理超时
 	_, _ = io.WriteString(w, ": connected\n\n")
 	if flusher != nil {
 		flusher.Flush()
@@ -386,11 +1294,670 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 	}))
 }
 
-// handleNonStream 保持原样不变
+// ---------- 以下函数均保持旧版不变 ----------
+
 func (h *Handler) handleNonStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, toolNames []string, toolSchemas []toolcall.ToolSchema, estimatedPromptTokens int) {
-	// 与你旧版完全一致，这里省略，请从你的旧版复制
-	// ...
+	result, upstreamErr, err := h.readCompletedChat(body, model, toolNames)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "读取上游响应失败"})
+		return
+	}
+	if upstreamErr != nil {
+		status := upstreamErr.StatusCode
+		if status <= 0 {
+			status = http.StatusBadGateway
+		}
+		writeJSON(w, status, map[string]any{"error": upstreamErr.Error()})
+		return
+	}
+
+	message := map[string]any{
+		"role":    "assistant",
+		"content": result.Content,
+	}
+	if result.ReasoningContent != "" {
+		message["reasoning_content"] = result.ReasoningContent
+	}
+	if len(result.ToolCalls) > 0 {
+		if result.Content == "" {
+			message["content"] = nil
+		}
+		message["tool_calls"] = toolcall.FormatOpenAIToolCallsWithSchemas(result.ToolCalls, toolSchemas)
+	}
+	result.PromptTokens, result.CompletionTokens, result.TotalTokens = applyUsageFallback(
+		result.PromptTokens,
+		result.CompletionTokens,
+		result.TotalTokens,
+		estimatedPromptTokens,
+		estimateOpenAIOutputTokens(result.Content, result.ToolCalls),
+	)
+	h.logger.DebugModule("OPENAI", "non-stream response model=%s content=%q tool_calls=%s finish_reason=%s usage=%s", model, result.Content, debugJSON(result.ToolCalls), result.FinishReason, debugJSON(map[string]any{
+		"prompt_tokens":     result.PromptTokens,
+		"completion_tokens": result.CompletionTokens,
+		"total_tokens":      result.TotalTokens,
+	}))
+	h.metrics.RecordModelUsage(statsModel, result.PromptTokens, result.CompletionTokens, result.TotalTokens)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
+		"object":  "chat.completion",
+		"created": time.Now().Unix(),
+		"model":   model,
+		"choices": []map[string]any{{
+			"index":         0,
+			"message":       message,
+			"finish_reason": result.FinishReason,
+		}},
+		"usage": map[string]any{
+			"prompt_tokens":     result.PromptTokens,
+			"completion_tokens": result.CompletionTokens,
+			"total_tokens":      result.TotalTokens,
+		},
+	})
 }
 
-// 以下全部是你旧版中的其他函数，保持不动
-// 请确保将你旧版 handler.go 中的所有其余函数完整保留在本文件中
+func parseChatCompletionContent(rawBody []byte, exposeThinking bool) (string, string, int, int, int) {
+	payloads := make([]map[string]any, 0)
+	trimmed := strings.TrimSpace(string(rawBody))
+
+	if trimmed != "" {
+		var direct map[string]any
+		if json.Unmarshal([]byte(trimmed), &direct) == nil {
+			payloads = append(payloads, direct)
+		} else {
+			events, _ := parseSSEPayloads(trimmed, true)
+			for _, event := range events {
+				var decoded map[string]any
+				if json.Unmarshal([]byte(event), &decoded) == nil {
+					payloads = append(payloads, decoded)
+				}
+			}
+		}
+	}
+
+	var contentBuilder strings.Builder
+	var reasoningBuilder strings.Builder
+	promptTokens, completionTokens, totalTokens := 0, 0, 0
+
+	for _, raw := range payloads {
+		promptTokens, completionTokens, totalTokens = extractUsage(raw, promptTokens, completionTokens, totalTokens)
+		for _, choice := range collectChatChoices(raw) {
+			content := extractChoiceContent(choice)
+			if content == "" {
+				continue
+			}
+			phase := extractChoicePhase(choice)
+			if isThinkingPhase(phase) {
+				if exposeThinking {
+					reasoningBuilder.WriteString(content)
+				}
+				continue
+			}
+			contentBuilder.WriteString(content)
+		}
+	}
+
+	if strings.TrimSpace(contentBuilder.String()) == "" {
+		for _, raw := range payloads {
+			if fallback := strings.TrimSpace(extractChatTextFromPayload(raw)); fallback != "" {
+				contentBuilder.WriteString(fallback)
+				break
+			}
+		}
+	}
+
+	return strings.TrimSpace(contentBuilder.String()), strings.TrimSpace(reasoningBuilder.String()), promptTokens, completionTokens, totalTokens
+}
+
+func collectChatChoices(payload map[string]any) []map[string]any {
+	if payload == nil {
+		return nil
+	}
+	var result []map[string]any
+	if choices, ok := payload["choices"].([]any); ok {
+		for _, item := range choices {
+			if choice, ok := item.(map[string]any); ok {
+				result = append(result, choice)
+			}
+		}
+	}
+	for _, key := range []string{"data", "message", "response", "result", "output"} {
+		if nested, ok := payload[key].(map[string]any); ok {
+			result = append(result, collectChatChoices(nested)...)
+		}
+	}
+	return result
+}
+
+func extractChoiceContent(choice map[string]any) string {
+	if choice == nil {
+		return ""
+	}
+	if message, ok := choice["message"].(map[string]any); ok {
+		if content := extractStructuredContent(message["content"]); content != "" {
+			return content
+		}
+		if extra, ok := message["extra"].(map[string]any); ok {
+			if summary := extractThinkingSummary(extra); summary != "" {
+				return summary
+			}
+		}
+	}
+	if delta, ok := choice["delta"].(map[string]any); ok {
+		if content := extractStructuredContent(delta["content"]); content != "" {
+			return content
+		}
+		if extra, ok := delta["extra"].(map[string]any); ok {
+			if summary := extractThinkingSummary(extra); summary != "" {
+				return summary
+			}
+		}
+	}
+	return ""
+}
+
+func extractChoicePhase(choice map[string]any) string {
+	if choice == nil {
+		return ""
+	}
+	if delta, ok := choice["delta"].(map[string]any); ok {
+		return strings.TrimSpace(fmt.Sprint(delta["phase"]))
+	}
+	return ""
+}
+
+func extractStructuredContent(value any) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			if text := extractStructuredContent(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	case map[string]any:
+		if text := strings.TrimSpace(fmt.Sprint(v["text"])); text != "" {
+			return text
+		}
+		for _, key := range []string{"content", "value", "output_text", "answer"} {
+			if text := extractStructuredContent(v[key]); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func extractChatTextFromPayload(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		text := strings.TrimSpace(v)
+		if text == "" {
+			return ""
+		}
+		if strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") {
+			var nested any
+			if json.Unmarshal([]byte(text), &nested) == nil {
+				return extractChatTextFromPayload(nested)
+			}
+		}
+		return text
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			if text := extractChatTextFromPayload(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	case map[string]any:
+		for _, key := range []string{
+			"content", "text", "message", "delta", "answer", "output_text",
+			"result", "output", "response", "data",
+		} {
+			if text := extractChatTextFromPayload(v[key]); text != "" {
+				return text
+			}
+		}
+		for _, item := range v {
+			if text := extractChatTextFromPayload(item); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func extractUsage(raw map[string]any, currentPrompt, currentCompletion, currentTotal int) (int, int, int) {
+	usage, _ := raw["usage"].(map[string]any)
+	if usage == nil {
+		return currentPrompt, currentCompletion, currentTotal
+	}
+	prompt := int(numberValue(usage["prompt_tokens"]))
+	if prompt == 0 {
+		prompt = int(numberValue(usage["input_tokens"]))
+	}
+	completion := int(numberValue(usage["completion_tokens"]))
+	if completion == 0 {
+		completion = int(numberValue(usage["output_tokens"]))
+	}
+	total := int(numberValue(usage["total_tokens"]))
+	if total == 0 {
+		total = prompt + completion
+	}
+	if prompt > 0 {
+		currentPrompt = prompt
+	}
+	if completion > 0 {
+		currentCompletion = completion
+	}
+	if total > 0 {
+		currentTotal = total
+	}
+	return currentPrompt, currentCompletion, currentTotal
+}
+
+func numberValue(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	default:
+		return 0
+	}
+}
+
+func setSSEHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+}
+
+func writeSSE(w http.ResponseWriter, payload any) {
+	raw, _ := json.Marshal(payload)
+	_, _ = io.WriteString(w, "data: "+string(raw)+"\n\n")
+}
+
+func debugJSON(value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	return string(raw)
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func uniqueStrings(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		result = append(result, item)
+	}
+	return result
+}
+
+func statsModelName(requested string, resolved string) string {
+	if name := strings.TrimSpace(requested); name != "" {
+		return name
+	}
+	return strings.TrimSpace(resolved)
+}
+
+func normalizeSize(size string) string {
+	switch size {
+	case "1024x1024":
+		return "1:1"
+	case "1536x1024":
+		return "4:3"
+	case "1024x1536":
+		return "3:4"
+	case "1792x1024":
+		return "16:9"
+	case "1024x1792":
+		return "9:16"
+	default:
+		return size
+	}
+}
+
+func (h *Handler) HandleImagesGeneration(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Model          string `json:"model"`
+		Prompt         string `json:"prompt"`
+		Size           string `json:"size"`
+		ResponseFormat string `json:"response_format"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "请求体格式错误"}})
+		return
+	}
+	if strings.TrimSpace(payload.Prompt) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "prompt 是必填参数"}})
+		return
+	}
+
+	url, err := h.generateAsset(r.Context(), payload.Model, "t2i", normalizeSize(payload.Size), []map[string]any{{
+		"role":    "user",
+		"content": payload.Prompt,
+	}})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, assetErrorPayload(err))
+		return
+	}
+
+	item := map[string]any{"url": url}
+	if payload.ResponseFormat == "b64_json" {
+		if encoded, err := h.downloadAsBase64(r.Context(), url); err == nil {
+			item = map[string]any{"b64_json": encoded}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"created": time.Now().Unix(),
+		"data":    []map[string]any{item},
+	})
+}
+
+func (h *Handler) HandleImagesEdit(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(100 << 20); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "无法解析 multipart 请求"}})
+		return
+	}
+	prompt := r.FormValue("prompt")
+	if strings.TrimSpace(prompt) == "" {
+		prompt = h.promptValue(prompts.IDImageEditDefault)
+	}
+	model := r.FormValue("model")
+	size := normalizeSize(r.FormValue("size"))
+	responseFormat := r.FormValue("response_format")
+
+	parts := []map[string]any{{"type": "text", "text": prompt}}
+	files := collectMultipartFiles(r.MultipartForm)
+	if len(files) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "image 是必填参数"}})
+		return
+	}
+	for _, file := range files {
+		parts = append(parts, map[string]any{"type": "image", "image": file})
+	}
+
+	url, err := h.generateAsset(r.Context(), model, "image_edit", size, []map[string]any{{
+		"role":    "user",
+		"content": parts,
+	}})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, assetErrorPayload(err))
+		return
+	}
+	item := map[string]any{"url": url}
+	if responseFormat == "b64_json" {
+		if encoded, err := h.downloadAsBase64(r.Context(), url); err == nil {
+			item = map[string]any{"b64_json": encoded}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"created": time.Now().Unix(),
+		"data":    []map[string]any{item},
+	})
+}
+
+func assetErrorPayload(err error) map[string]any {
+	payload := map[string]any{
+		"error": map[string]any{"message": err.Error()},
+	}
+
+	var parseErr *assetParseError
+	if errors.As(err, &parseErr) {
+		result := parseErr.Result()
+		payload["debug"] = map[string]any{
+			"rawText":        string(result.RawBody),
+			"rawPreview":     result.RawPreview,
+			"ssePayloads":    result.SSEPayloads,
+			"responseIds":    result.ResponseIDs,
+			"taskId":         result.TaskID,
+			"taskCandidates": result.TaskCandidates,
+		}
+	}
+
+	return payload
+}
+
+func collectMultipartFiles(form *multipart.Form) []string {
+	result := make([]string, 0)
+	if form == nil {
+		return result
+	}
+	appendFiles := func(key string) {
+		for _, header := range form.File[key] {
+			file, err := header.Open()
+			if err != nil {
+				continue
+			}
+			data, err := io.ReadAll(file)
+			_ = file.Close()
+			if err != nil {
+				continue
+			}
+			mimeType := header.Header.Get("Content-Type")
+			if mimeType == "" {
+				mimeType = "image/png"
+			}
+			result = append(result, "data:"+mimeType+";base64,"+base64.StdEncoding.EncodeToString(data))
+		}
+	}
+	appendFiles("image")
+	appendFiles("images")
+	return result
+}
+
+func (h *Handler) HandleVideos(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Model  string `json:"model"`
+		Prompt string `json:"prompt"`
+		Size   string `json:"size"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "请求体格式错误"}})
+		return
+	}
+	if strings.TrimSpace(payload.Prompt) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "prompt 是必填参数"}})
+		return
+	}
+
+	url, err := h.generateAsset(r.Context(), payload.Model, "t2v", normalizeSize(payload.Size), []map[string]any{{
+		"role":    "user",
+		"content": payload.Prompt,
+	}})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, assetErrorPayload(err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":      fmt.Sprintf("video_%d", time.Now().UnixNano()),
+		"object":  "video",
+		"created": time.Now().Unix(),
+		"status":  "completed",
+		"data":    []map[string]any{{"url": url}},
+	})
+}
+
+func (h *Handler) generateAsset(ctx context.Context, requestedModel, chatType, size string, messages []map[string]any) (string, error) {
+	return h.generateAssetWithSession(ctx, requestedModel, chatType, size, messages, true)
+}
+
+func (h *Handler) generateAssetWithSession(ctx context.Context, requestedModel, chatType, size string, messages []map[string]any, allowGuestRefresh bool) (string, error) {
+	model, _ := h.ResolveModel(ctx, requestedModel, chatType)
+	session, err := h.accounts.GetAccountSession()
+	if err != nil {
+		return "", err
+	}
+	normalizedMessages := normalizeMessages(messages, chatType, thinkingModeFast)
+	normalizedMessages, err = h.uploadInlineMedia(ctx, session.Token, normalizedMessages)
+	if err != nil {
+		return "", err
+	}
+	chatID, err := h.qwen.NewChat(ctx, session.Token, model, chatType)
+	if err != nil {
+		if allowGuestRefresh && session.IsGuest() && h.refreshGuestSession(ctx, session, err) == nil {
+			return h.generateAssetWithSession(ctx, requestedModel, chatType, size, messages, false)
+		}
+		return "", err
+	}
+
+	body := buildChatRequestBody(session, model, chatID, chatType, normalizedMessages)
+	if size != "" {
+		body["size"] = size
+		applyAssetSize(body, chatType, size)
+	}
+	resp, err := h.qwen.ChatCompletions(ctx, session.Token, chatID, body)
+	if err != nil {
+		if allowGuestRefresh && session.IsGuest() && h.refreshGuestSession(ctx, session, err) == nil {
+			return h.generateAssetWithSession(ctx, requestedModel, chatType, size, messages, false)
+		}
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	result, err := readAssetResult(resp.Body)
+	if err != nil {
+		if allowGuestRefresh && session.IsGuest() && h.refreshGuestSession(ctx, session, err) == nil {
+			return h.generateAssetWithSession(ctx, requestedModel, chatType, size, messages, false)
+		}
+		return "", err
+	}
+	if result.UpstreamError != nil && result.UpstreamError.Retryable {
+		time.Sleep(800 * time.Millisecond)
+		resp, err = h.qwen.ChatCompletions(ctx, session.Token, chatID, body)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		result, err = readAssetResult(resp.Body)
+		if err != nil {
+			return "", err
+		}
+	}
+	if result.UpstreamError != nil {
+		if allowGuestRefresh && session.IsGuest() && h.refreshGuestSession(ctx, session, result.UpstreamError) == nil {
+			return h.generateAssetWithSession(ctx, requestedModel, chatType, size, messages, false)
+		}
+		return "", result.UpstreamError
+	}
+
+	if result.ContentURL == "" && chatID != "" {
+		if fallbackURL := h.resolveAssetFromChatDetail(ctx, session.Token, chatID, result.ResponseIDs); fallbackURL != "" {
+			result.ContentURL = fallbackURL
+			result.ChatDetailFallback = true
+		}
+		if chatType == "t2v" && len(result.TaskCandidates) == 0 {
+			result.TaskCandidates = h.resolveVideoTasksFromChatDetail(ctx, session.Token, chatID, result.ResponseIDs)
+			if result.TaskID == "" && len(result.TaskCandidates) > 0 {
+				result.TaskID = result.TaskCandidates[0]
+			}
+		}
+	}
+
+	if result.ContentURL != "" {
+		return result.ContentURL, nil
+	}
+	if chatType == "t2v" && len(result.TaskCandidates) > 0 {
+		return h.pollVideo(ctx, session.Token, result.TaskCandidates)
+	}
+	return "", &assetParseError{message: "未能从上游响应中解析资源链接", result: result}
+}
+
+func (h *Handler) pollVideo(ctx context.Context, token string, taskCandidates []string) (string, error) {
+	deadline := time.Now().Add(2 * time.Minute)
+	for _, taskID := range uniqueStrings(taskCandidates) {
+		for time.Now().Before(deadline) {
+			payload, err := h.qwen.GetVideoTaskStatus(ctx, token, taskID)
+			if err == nil {
+				if status := strings.ToLower(fmt.Sprint(payload["task_status"])); status == "failed" {
+					break
+				}
+				if url := extractResourceURLFromPayload(payload); url != "" {
+					return url, nil
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}
+	return "", errors.New("视频生成超时，请稍后再试")
+}
+
+func (h *Handler) resolveAssetFromChatDetail(ctx context.Context, token, chatID string, responseIDs []string) string {
+	for attempt := 0; attempt < 5; attempt++ {
+		detail, err := h.qwen.GetChatDetail(ctx, token, chatID)
+		if err == nil {
+			if url := extractAssetFromChatDetail(detail, responseIDs); url != "" {
+				return url
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(800 * time.Millisecond):
+		}
+	}
+	return ""
+}
+
+func (h *Handler) resolveVideoTasksFromChatDetail(ctx context.Context, token, chatID string, responseIDs []string) []string {
+	for attempt := 0; attempt < 5; attempt++ {
+		detail, err := h.qwen.GetChatDetail(ctx, token, chatID)
+		if err == nil {
+			tasks := extractVideoTasksFromChatDetail(detail, responseIDs)
+			if len(tasks) > 0 {
+				return tasks
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(1200 * time.Millisecond):
+		}
+	}
+	return nil
+}
+
+func (h *Handler) downloadAsBase64(ctx context.Context, assetURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(body), nil
+}

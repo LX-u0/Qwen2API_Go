@@ -75,31 +75,6 @@ type chatReasoning struct {
 	Effort any `json:"effort"`
 }
 
-// ---------- 新增：安全提取工具名称 ----------
-func extractToolNames(tools any) []string {
-	if tools == nil {
-		return nil
-	}
-	toolList, ok := tools.([]any)
-	if !ok {
-		return nil
-	}
-	names := make([]string, 0, len(toolList))
-	for _, raw := range toolList {
-		tool, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		name := fmt.Sprint(tool["name"])
-		if strings.TrimSpace(name) != "" {
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
-// ---------- 以下全部为旧版原有函数，未做任何改动 ----------
-
 func mergeSystemMessages(messages []map[string]any) []map[string]any {
 	systemTexts := make([]string, 0)
 	result := make([]map[string]any, 0, len(messages))
@@ -911,7 +886,6 @@ func buildModelVariant(model qwen.Model, suffix string) map[string]any {
 	}
 }
 
-// ---------- 修改后的 HandleChatCompletion ----------
 func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	var payload chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -919,14 +893,10 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	estimatedPromptTokens := estimateOpenAIInputTokens(payload.Messages, payload.Tools, payload.ToolChoice)
-
-	// 安全提取工具列表，防止 panic
-	toolList, _ := payload.Tools.([]any)
-	if shouldReplyHi(payload) && len(toolList) == 0 {
+	if shouldReplyHi(payload) {
 		h.writeHiResponse(w, payload.Model, payload.Stream, estimatedPromptTokens)
 		return
 	}
-
 	executed, status, err := h.executeChatRequest(r.Context(), executedChatRequest{
 		Model:           payload.Model,
 		Messages:        payload.Messages,
@@ -948,13 +918,11 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	}
 	defer executed.Stream.Close()
 
-	toolNames := extractToolNames(payload.Tools)
-
 	if payload.Stream {
-		h.handleStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), toolNames, executed.ToolSchemas, estimatedPromptTokens)
+		h.handleStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), executed.ToolNames, executed.ToolSchemas, estimatedPromptTokens)
 		return
 	}
-	h.handleNonStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), toolNames, executed.ToolSchemas, estimatedPromptTokens)
+	h.handleNonStream(w, executed.Stream, executed.Model, statsModelName(executed.RequestedModel, executed.Model), executed.ToolNames, executed.ToolSchemas, estimatedPromptTokens)
 }
 
 func shouldReplyHi(payload chatRequest) bool {
@@ -1041,48 +1009,17 @@ func (h *Handler) writeHiResponse(w http.ResponseWriter, model string, stream bo
 	}
 }
 
-// ---------- 修改后的 handleStream（加入心跳和 :connected）----------
 func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, toolNames []string, toolSchemas []toolcall.ToolSchema, estimatedPromptTokens int) {
-	start := time.Now()
 	setSSEHeaders(w)
 	flusher, _ := w.(http.Flusher)
-
-	// 立即发送连接信号，防止代理超时
-	_, _ = io.WriteString(w, ": connected\n\n")
-	if flusher != nil {
-		flusher.Flush()
-	}
-
-	// 始终启用心跳
-	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
-	defer heartbeatCancel()
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-heartbeatCtx.Done():
-				return
-			case <-ticker.C:
-				_, _ = io.WriteString(w, ": heartbeat\n\n")
-				if flusher != nil {
-					flusher.Flush()
-				}
-			}
-		}
-	}()
-
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 
 	messageID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 	exposeThinking := h.shouldExposeThinking()
 	promptTokens, completionTokens, totalTokens := 0, 0, 0
-	const maxContentBytes = 512 * 1024
 	var contentBuilder strings.Builder
-	contentCapped := false
 	toolCallsSent := false
-	hasTools := len(toolNames) > 0
 	streamState := toolcall.NewStreamState()
 
 	for scanner.Scan() {
@@ -1110,10 +1047,6 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 		delta, _ := choice["delta"].(map[string]any)
 		if delta == nil {
 			continue
-		}
-
-		if finishReason := fmt.Sprint(choice["finish_reason"]); finishReason == "length" {
-			h.logger.WarnModule("OPENAI", "upstream finish_reason=length detected model=%s tool_capture=%t, response may be truncated", model, hasTools)
 		}
 
 		role := fmt.Sprint(delta["role"])
@@ -1146,7 +1079,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 			continue
 		}
 		h.logger.DebugModule("OPENAI", "stream delta model=%s phase=%s content=%q", model, phase, content)
-		if hasTools {
+		if len(toolNames) > 0 {
 			chunkResult := toolcall.ProcessStreamChunk(streamState, content)
 			h.logger.DebugModule("OPENAI", "stream tool sieve model=%s input=%q raw_visible=%q tool_calls=%s", model, content, chunkResult.Content, debugJSON(chunkResult.ToolCalls))
 			if len(chunkResult.ToolCalls) > 0 {
@@ -1169,13 +1102,7 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 			content = toolcall.CleanVisibleChunk(chunkResult.Content)
 			h.logger.DebugModule("OPENAI", "stream cleaned visible model=%s cleaned=%q", model, content)
 		}
-		if !contentCapped {
-			if contentBuilder.Len()+len(content) > maxContentBytes {
-				contentCapped = true
-			} else {
-				contentBuilder.WriteString(content)
-			}
-		}
+		contentBuilder.WriteString(content)
 
 		if content != "" {
 			h.logger.DebugModule("OPENAI", "stream emit content model=%s content=%q", model, content)
@@ -1196,17 +1123,13 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 		}
 	}
 
-	if hasTools {
+	if len(toolNames) > 0 {
 		finalResult := toolcall.FinalizeStream(streamState)
 		h.logger.DebugModule("OPENAI", "stream final sieve model=%s raw_visible=%q tool_calls=%s", model, finalResult.Content, debugJSON(finalResult.ToolCalls))
 		finalContent := toolcall.CleanVisibleChunk(finalResult.Content)
 		h.logger.DebugModule("OPENAI", "stream final cleaned model=%s cleaned=%q", model, finalContent)
-		if !contentCapped && strings.TrimSpace(finalContent) != "" {
-			if contentBuilder.Len()+len(finalContent) > maxContentBytes {
-				contentCapped = true
-			} else {
-				contentBuilder.WriteString(finalContent)
-			}
+		if strings.TrimSpace(finalContent) != "" {
+			contentBuilder.WriteString(finalContent)
 			h.logger.DebugModule("OPENAI", "stream emit final content model=%s content=%q", model, finalContent)
 			writeSSE(w, map[string]any{
 				"id":      messageID,
@@ -1281,19 +1204,17 @@ func (h *Handler) handleStream(w http.ResponseWriter, body io.Reader, model stri
 	})
 	_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	h.metrics.RecordModelUsage(statsModel, promptTokens, completionTokens, totalTokens)
-	h.logger.DebugModule("OPENAI", "stream completed model=%s final_content=%q finish_reason=%s duration=%s usage=%s", model, contentBuilder.String(), func() string {
+	h.logger.DebugModule("OPENAI", "stream completed model=%s final_content=%q finish_reason=%s usage=%s", model, contentBuilder.String(), func() string {
 		if toolCallsSent {
 			return "tool_calls"
 		}
 		return "stop"
-	}(), time.Since(start), debugJSON(map[string]any{
+	}(), debugJSON(map[string]any{
 		"prompt_tokens":     promptTokens,
 		"completion_tokens": completionTokens,
 		"total_tokens":      totalTokens,
 	}))
 }
-
-// ---------- 以下函数保持旧版不变 ----------
 
 func (h *Handler) handleNonStream(w http.ResponseWriter, body io.Reader, model string, statsModel string, toolNames []string, toolSchemas []toolcall.ToolSchema, estimatedPromptTokens int) {
 	result, upstreamErr, err := h.readCompletedChat(body, model, toolNames)
